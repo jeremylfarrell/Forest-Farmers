@@ -56,38 +56,19 @@ def load_config():
     # Try Streamlit secrets first (for Streamlit Cloud)
     try:
         # Check if we have Streamlit secrets available
-        if hasattr(st, 'secrets'):
-            st.write("DEBUG: st.secrets exists")  # Debug line
-            st.write("DEBUG: Available secrets:", list(st.secrets.keys()))  # Debug line
-            
-            # Access root-level secrets directly
-            if "VACUUM_SHEET_URL" in st.secrets:
-                vacuum_url = st.secrets["VACUUM_SHEET_URL"]
-                st.write(f"DEBUG: Found VACUUM_SHEET_URL: {vacuum_url[:50]}...")  # Debug line
-            else:
-                st.write("DEBUG: VACUUM_SHEET_URL not in secrets")  # Debug line
-                
-            if "PERSONNEL_SHEET_URL" in st.secrets:
-                personnel_url = st.secrets["PERSONNEL_SHEET_URL"]
-                st.write(f"DEBUG: Found PERSONNEL_SHEET_URL: {personnel_url[:50]}...")  # Debug line
-            else:
-                st.write("DEBUG: PERSONNEL_SHEET_URL not in secrets")  # Debug line
+        if hasattr(st, 'secrets') and 'sheets' in st.secrets:
+            # Access sheet URLs from [sheets] section
+            vacuum_url = st.secrets["sheets"]["VACUUM_SHEET_URL"]
+            personnel_url = st.secrets["sheets"]["PERSONNEL_SHEET_URL"]
             
             if vacuum_url and personnel_url:
-                st.write("DEBUG: Both URLs found, returning them!")  # Debug line
                 # Successfully got both URLs from secrets
                 return vacuum_url, personnel_url, credentials_path
-            else:
-                st.write("DEBUG: One or both URLs are None")  # Debug line
-        else:
-            st.write("DEBUG: st.secrets does not exist")  # Debug line
     except Exception as e:
         # Secrets not available or error accessing them
-        st.error(f"DEBUG: Exception accessing secrets: {e}")  # Debug line
         pass
     
     # Fall back to .env file (for local development)
-    st.write("DEBUG: Trying .env file...")  # Debug line
     try:
         from dotenv import load_dotenv
         load_dotenv()
@@ -96,15 +77,12 @@ def load_config():
         
         if vacuum_url and personnel_url:
             # Running locally with .env file
-            st.write("DEBUG: Found URLs in .env")  # Debug line
             return vacuum_url, personnel_url, credentials_path
     except ImportError:
         # python-dotenv not installed (that's ok on Streamlit Cloud)
-        st.write("DEBUG: python-dotenv not installed")  # Debug line
         pass
     
     # If we get here, configuration is missing
-    st.write("DEBUG: Returning None for both URLs")  # Debug line
     return None, None, credentials_path
 
 
