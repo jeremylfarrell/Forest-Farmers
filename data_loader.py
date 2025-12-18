@@ -8,6 +8,7 @@ PERFORMANCE: Now includes caching for dramatic speed improvements!
 - Manual refresh available via dashboard button
 
 UPDATED: Now works with both local credentials AND Streamlit Cloud secrets!
+DEBUG VERSION: Includes debug output for troubleshooting
 """
 
 import pandas as pd
@@ -17,6 +18,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 import os
 import json
+import re
 import config
 
 
@@ -69,7 +71,20 @@ def connect_to_sheets(credentials_file):
 
 @st.cache_data(ttl=3600, show_spinner="Loading vacuum data from cache...")
 def load_all_vacuum_data(sheet_url, credentials_file, days=None):
-    """Load ALL vacuum data from all monthly tabs"""
+    """
+    Load ALL vacuum data from all monthly tabs
+
+    CACHED: Data is cached for 1 hour to dramatically improve performance.
+    Switching between pages is instant after first load!
+
+    Args:
+        sheet_url: Google Sheet URL
+        credentials_file: Path to credentials JSON
+        days: If specified, only load last N days (None = all data)
+
+    Returns:
+        DataFrame with all vacuum readings
+    """
     try:
         client = connect_to_sheets(credentials_file)
         sheet = client.open_by_url(sheet_url)
@@ -77,20 +92,19 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
         # Get all worksheets (monthly tabs)
         all_worksheets = sheet.worksheets()
         
-        # ADD THIS DEBUG LINE:
+        # DEBUG: Show what we found
         st.write(f"DEBUG: Found {len(all_worksheets)} total worksheets")
-        st.write(f"DEBUG: Worksheet names: {[ws.title for ws in all_worksheets]}")
+        worksheet_names = [ws.title for ws in all_worksheets]
+        st.write(f"DEBUG: Worksheet names: {worksheet_names}")
 
         all_data = []
 
         for worksheet in all_worksheets:
             # Skip any non-date worksheets (like instructions, etc.)
             if not is_month_tab(worksheet.title):
-                # ADD THIS DEBUG LINE:
-                st.write(f"DEBUG: Skipping worksheet '{worksheet.title}' - not a month tab")
+                st.write(f"DEBUG: Skipping '{worksheet.title}' - not a month tab")
                 continue
 
-            # ADD THIS DEBUG LINE:
             st.write(f"DEBUG: Loading data from '{worksheet.title}'...")
             
             try:
@@ -99,26 +113,39 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
                 if data:
                     df = pd.DataFrame(data)
                     all_data.append(df)
-                    # ADD THIS DEBUG LINE:
                     st.write(f"DEBUG: Loaded {len(df)} records from '{worksheet.title}'")
+                else:
+                    st.write(f"DEBUG: No records found in '{worksheet.title}'")
             except Exception as e:
-                # ADD THIS DEBUG LINE:
                 st.warning(f"DEBUG: Error loading '{worksheet.title}': {str(e)}")
                 if config.DEBUG_MODE:
                     st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
                 continue
 
-        # ADD THIS DEBUG LINE:
         st.write(f"DEBUG: Loaded data from {len(all_data)} worksheets total")
         
         if not all_data:
+            st.warning("DEBUG: No data loaded from any worksheet!")
             return pd.DataFrame()
 
         # Combine all data
         combined_df = pd.concat(all_data, ignore_index=True)
-        
-        # ADD THIS DEBUG LINE:
         st.write(f"DEBUG: Combined dataframe has {len(combined_df)} total records")
+
+        # Clean and process the data
+        combined_df = process_vacuum_data(combined_df)
+
+        # Filter by date if specified
+        if days is not None:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            combined_df = combined_df[combined_df['Timestamp'] >= cutoff_date]
+            st.write(f"DEBUG: After filtering to last {days} days: {len(combined_df)} records")
+
+        return combined_df
+
+    except Exception as e:
+        st.error(f"Error loading vacuum data: {str(e)}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading personnel data from cache...")
@@ -203,7 +230,7 @@ def process_vacuum_data(df):
     timestamp_col = None
     for possible_name in ['Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
                           'Last Communication', 'Last communication', 'last communication',
-                          'Time', 'time']:
+                          'Time', 'time', 'Scrape_Timestamp']:
         if possible_name in df.columns:
             timestamp_col = possible_name
             break
@@ -289,7 +316,7 @@ def is_month_tab(tab_name):
     Supports multiple formats:
     - YYYY-MM (e.g., '2025-03')
     - Month_YYYY (e.g., 'Nov_2025', 'December_2025')
-    - Any tab with year 2024, 2025, or 2026 in the name
+    - Any tab with year 2024, 2025, 2026, or 2027 in the name
 
     Args:
         tab_name: Name of the worksheet tab
@@ -297,8 +324,6 @@ def is_month_tab(tab_name):
     Returns:
         True if it looks like a month tab, False otherwise
     """
-    import re
-
     # Pattern 1: YYYY-MM format (e.g., '2025-11')
     pattern_yyyy_mm = r'^\d{4}-\d{2}$'
 
@@ -351,7 +376,7 @@ def merge_vacuum_personnel(vacuum_df, personnel_df):
 
     # Find the sensor name column in vacuum data
     sensor_col = None
-    for col in ['Sensor Name', 'sensor', 'mainline', 'location']:
+    for col in ['Sensor Name', 'sensor', 'mainline', 'location', 'Name']:
         if col in vacuum_df.columns:
             sensor_col = col
             break
