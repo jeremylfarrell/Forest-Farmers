@@ -214,40 +214,45 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
 def process_vacuum_data(df):
     """
     Clean and process vacuum data
-
-    CACHED: Processing is cached to avoid repeated computation
-
-    Args:
-        df: Raw DataFrame from Google Sheets
-
-    Returns:
-        Processed DataFrame with proper types and cleaned data
     """
     if df.empty:
         return df
 
+    st.write(f"DEBUG PROCESS: Starting with {len(df)} records")
+    st.write(f"DEBUG PROCESS: Columns: {list(df.columns)}")
+
     # Find timestamp/date column - try multiple possible names
     timestamp_col = None
-    for possible_name in ['Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
+    for possible_name in ['Scrape_Timestamp', 'Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
                           'Last Communication', 'Last communication', 'last communication',
-                          'Time', 'time', 'Scrape_Timestamp']:
+                          'Time', 'time']:
         if possible_name in df.columns:
             timestamp_col = possible_name
+            st.write(f"DEBUG PROCESS: Found timestamp column: '{timestamp_col}'")
             break
 
-    # Convert timestamp to datetime if found
     if timestamp_col:
+        st.write(f"DEBUG PROCESS: Sample values before conversion: {df[timestamp_col].head(3).tolist()}")
+        
+        # Convert timestamp to datetime
         df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
+        
+        st.write(f"DEBUG PROCESS: Sample values after conversion: {df['Timestamp'].head(3).tolist()}")
+        st.write(f"DEBUG PROCESS: Number of NaT values: {df['Timestamp'].isna().sum()}")
 
         # Add derived columns
         df['Date'] = df['Timestamp'].dt.date
         df['Hour'] = df['Timestamp'].dt.hour
 
         # Remove rows with invalid timestamps
+        before_drop = len(df)
         df = df.dropna(subset=['Timestamp'])
+        after_drop = len(df)
+        st.write(f"DEBUG PROCESS: Dropped {before_drop - after_drop} rows with invalid timestamps")
+        st.write(f"DEBUG PROCESS: Remaining records: {len(df)}")
     else:
-        # No timestamp column found - create a default one with current time
-        # This allows the dashboard to work even without timestamps
+        st.write("DEBUG PROCESS: No timestamp column found!")
+        # No timestamp column found
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
 
@@ -259,6 +264,10 @@ def process_vacuum_data(df):
     # Fill missing vacuum values
     for col in vacuum_cols:
         df[col] = df[col].fillna(config.FILL_MISSING_VACUUM)
+
+    st.write(f"DEBUG PROCESS: Final dataframe has {len(df)} records")
+    if len(df) > 0:
+        st.write(f"DEBUG PROCESS: Date range: {df['Timestamp'].min()} to {df['Timestamp'].max()}")
 
     return df
 
