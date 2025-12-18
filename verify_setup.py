@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""
+Dashboard Setup Verification Script
+Run this to verify your dashboard is properly set up
+"""
+
+import os
+import sys
+
+
+def check_file(filepath, description):
+    """Check if a file exists"""
+    exists = os.path.exists(filepath)
+    status = "✓" if exists else "✗"
+    print(f"{status} {description}: {filepath}")
+    return exists
+
+
+def check_directory(dirpath, description):
+    """Check if a directory exists"""
+    exists = os.path.isdir(dirpath)
+    status = "✓" if exists else "✗"
+    print(f"{status} {description}: {dirpath}")
+    return exists
+
+
+def check_import(module_name, description):
+    """Check if a module can be imported"""
+    try:
+        __import__(module_name)
+        print(f"✓ {description}: {module_name}")
+        return True
+    except ImportError as e:
+        print(f"✗ {description}: {module_name} - {e}")
+        return False
+
+
+def main():
+    print("=" * 60)
+    print("Forest Farmers Dashboard - Setup Verification")
+    print("=" * 60)
+    print()
+
+    all_good = True
+
+    # Check directory structure
+    print("📁 Directory Structure:")
+    print("-" * 60)
+    all_good &= check_directory("page_modules", "Page modules directory")
+    print()
+
+    # Check main files
+    print("📄 Main Files:")
+    print("-" * 60)
+    all_good &= check_file("dashboard.py", "Dashboard main file")
+    all_good &= check_file("config.py", "Configuration file")
+    all_good &= check_file("data_loader.py", "Data loader")
+    all_good &= check_file("metrics.py", "Metrics module")
+    all_good &= check_file("utils.py", "Utilities module")
+    all_good &= check_file("geo_clustering.py", "Geographic clustering")
+    print()
+
+    # Check page files
+    print("📄 Page Modules:")
+    print("-" * 60)
+    all_good &= check_file("page_modules/__init__.py", "Page modules init file")
+    all_good &= check_file("page_modules/overview.py", "Overview page")
+    all_good &= check_file("page_modules/mainlines.py", "Mainlines page")
+    all_good &= check_file("page_modules/employees.py", "Employees page")
+    all_good &= check_file("page_modules/employee_effectiveness.py", "Employee effectiveness")
+    all_good &= check_file("page_modules/problem_clusters.py", "Problem clusters")
+    all_good &= check_file("page_modules/sensor_map.py", "Interactive sensor map")
+    all_good &= check_file("page_modules/sap_forecast.py", "Sap flow forecast")
+    all_good &= check_file("page_modules/maintenance.py", "Maintenance tracking")
+    all_good &= check_file("page_modules/daily_summary.py", "Daily operations summary")
+    all_good &= check_file("page_modules/raw_data.py", "Raw data page")
+    print()
+
+    # Check configuration files
+    print("⚙️  Configuration Files:")
+    print("-" * 60)
+    env_exists = check_file(".env", "Environment variables")
+    creds_exists = check_file("credentials.json", "Google credentials")
+    all_good &= env_exists and creds_exists
+    print()
+
+    # Check Python dependencies
+    print("📦 Python Dependencies:")
+    print("-" * 60)
+    all_good &= check_import("streamlit", "Streamlit")
+    all_good &= check_import("pandas", "Pandas")
+    all_good &= check_import("gspread", "GSpread")
+    all_good &= check_import("google.oauth2", "Google Auth")
+    all_good &= check_import("numpy", "NumPy")
+    all_good &= check_import("dotenv", "Python-dotenv")
+    all_good &= check_import("plotly", "Plotly (for maps)")
+    all_good &= check_import("requests", "Requests (for weather API)")
+    print()
+
+    # Try importing page modules
+    print("🔌 Page Module Imports:")
+    print("-" * 60)
+    try:
+        from page_modules import overview, mainlines, employees, employee_effectiveness, problem_clusters, raw_data, \
+            sensor_map, sap_forecast, maintenance, daily_summary
+        print("✓ All page modules imported successfully")
+
+        # Check render functions
+        modules = [
+            (overview, 'overview'),
+            (mainlines, 'mainlines'),
+            (employees, 'employees'),
+            (employee_effectiveness, 'employee_effectiveness'),
+            (problem_clusters, 'problem_clusters'),
+            (sensor_map, 'sensor_map'),
+            (sap_forecast, 'sap_forecast'),
+            (maintenance, 'maintenance'),
+            (daily_summary, 'daily_summary'),
+            (raw_data, 'raw_data')
+        ]
+
+        for module, name in modules:
+            has_render = hasattr(module, 'render')
+            status = "✓" if has_render else "✗"
+            print(f"{status} {name}.render() function exists")
+            all_good &= has_render
+
+    except ImportError as e:
+        print(f"✗ Failed to import page modules: {e}")
+        all_good = False
+    print()
+
+    # Final summary
+    print("=" * 60)
+    if all_good:
+        print("✅ All checks passed! Your dashboard is ready to run.")
+        print()
+        print("To start the dashboard, run:")
+        print("    streamlit run dashboard.py")
+    else:
+        print("⚠️  Some checks failed. Please review the output above.")
+        print()
+        print("Common fixes:")
+        print("1. Make sure you're in the correct directory")
+        print("2. Install missing dependencies: pip install streamlit pandas gspread google-auth numpy python-dotenv")
+        print("3. Create .env file with your Google Sheets URLs")
+        print("4. Add credentials.json file from Google Cloud Console")
+    print("=" * 60)
+
+    return 0 if all_good else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
