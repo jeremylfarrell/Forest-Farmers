@@ -55,14 +55,19 @@ def load_config():
     
     # Try Streamlit secrets first (for Streamlit Cloud)
     try:
+        # Check if we have Streamlit secrets available
         if hasattr(st, 'secrets'):
-            vacuum_url = st.secrets.get("VACUUM_SHEET_URL")
-            personnel_url = st.secrets.get("PERSONNEL_SHEET_URL")
+            # Access root-level secrets directly (not with .get())
+            if "VACUUM_SHEET_URL" in st.secrets:
+                vacuum_url = st.secrets["VACUUM_SHEET_URL"]
+            if "PERSONNEL_SHEET_URL" in st.secrets:
+                personnel_url = st.secrets["PERSONNEL_SHEET_URL"]
             
             if vacuum_url and personnel_url:
-                # Running on Streamlit Cloud with secrets configured
+                # Successfully got both URLs from secrets
                 return vacuum_url, personnel_url, credentials_path
-    except (FileNotFoundError, KeyError):
+    except Exception as e:
+        # Secrets not available or error accessing them
         pass
     
     # Fall back to .env file (for local development)
