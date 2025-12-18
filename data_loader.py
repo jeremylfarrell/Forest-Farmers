@@ -6,6 +6,8 @@ All data loading logic is centralized here for easy maintenance
 PERFORMANCE: Now includes caching for dramatic speed improvements!
 - Data cached for 1 hour (auto-refresh)
 - Manual refresh available via dashboard button
+
+UPDATED: Now works with both local credentials AND Streamlit Cloud secrets!
 """
 
 import pandas as pd
@@ -13,16 +15,20 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 import streamlit as st
+import os
+import json
 import config
 
 
 def connect_to_sheets(credentials_file):
     """
     Connect to Google Sheets with authentication
+    Works with BOTH local credentials file AND Streamlit Cloud secrets!
+    
     NOTE: No caching to avoid auth issues
 
     Args:
-        credentials_file: Path to Google service account JSON file
+        credentials_file: Path to Google service account JSON file (for local development)
 
     Returns:
         Authorized gspread client
@@ -32,8 +38,32 @@ def connect_to_sheets(credentials_file):
         'https://www.googleapis.com/auth/drive'
     ]
 
-    creds = Credentials.from_service_account_file(credentials_file, scopes=scope)
+    credentials_dict = None
+    
+    # Try Streamlit secrets first (for Streamlit Cloud)
+    try:
+        if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
+            credentials_dict = dict(st.secrets['gcp_service_account'])
+            # Successfully got credentials from Streamlit secrets
+    except (FileNotFoundError, KeyError, AttributeError):
+        pass
+    
+    # Fall back to local credentials file (for local development)
+    if credentials_dict is None:
+        if not os.path.exists(credentials_file):
+            raise FileNotFoundError(
+                f"❌ Credentials not found!\n\n"
+                f"For Streamlit Cloud: Add credentials to app secrets under [gcp_service_account]\n"
+                f"For Local Development: Need '{credentials_file}' file in your project folder"
+            )
+        
+        with open(credentials_file, 'r') as f:
+            credentials_dict = json.load(f)
+    
+    # Create credentials and authorize (works with dict from either source)
+    creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
     client = gspread.authorize(creds)
+    
     return client
 
 
