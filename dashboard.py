@@ -184,6 +184,7 @@ def load_data(days_to_load):
         st.info("""
         **For Streamlit Cloud:** Add these to your app secrets:
         ```
+        [sheets]
         VACUUM_SHEET_URL = "your-vacuum-sheet-url"
         PERSONNEL_SHEET_URL = "your-personnel-sheet-url"
         ```
@@ -195,13 +196,6 @@ def load_data(days_to_load):
         ```
         """)
         st.stop()
-
-    # Check for credentials (local file check - on cloud this is handled by secrets)
-    if not os.path.exists(credentials):
-        # On Streamlit Cloud, credentials come from secrets, not a file
-        # So this is only a warning for local development
-        st.warning(f"⚠️ Note: Local credentials file '{credentials}' not found")
-        st.info("On Streamlit Cloud, credentials should be in your app secrets under [gcp_service_account]")
 
     # Load data with progress indication
     with st.spinner('Loading data from Google Sheets...'):
