@@ -8,7 +8,6 @@ PERFORMANCE: Now includes caching for dramatic speed improvements!
 - Manual refresh available via dashboard button
 
 UPDATED: Now works with both local credentials AND Streamlit Cloud secrets!
-DEBUG VERSION: Includes debug output for troubleshooting
 """
 
 import pandas as pd
@@ -46,7 +45,6 @@ def connect_to_sheets(credentials_file):
     try:
         if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
             credentials_dict = dict(st.secrets['gcp_service_account'])
-            # Successfully got credentials from Streamlit secrets
     except (FileNotFoundError, KeyError, AttributeError):
         pass
     
@@ -91,46 +89,30 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
 
         # Get all worksheets (monthly tabs)
         all_worksheets = sheet.worksheets()
-        
-        # DEBUG: Show what we found
-        st.write(f"DEBUG: Found {len(all_worksheets)} total worksheets")
-        worksheet_names = [ws.title for ws in all_worksheets]
-        st.write(f"DEBUG: Worksheet names: {worksheet_names}")
 
         all_data = []
 
         for worksheet in all_worksheets:
             # Skip any non-date worksheets (like instructions, etc.)
             if not is_month_tab(worksheet.title):
-                st.write(f"DEBUG: Skipping '{worksheet.title}' - not a month tab")
                 continue
 
-            st.write(f"DEBUG: Loading data from '{worksheet.title}'...")
-            
             try:
                 # Get data from this worksheet
                 data = worksheet.get_all_records()
                 if data:
                     df = pd.DataFrame(data)
                     all_data.append(df)
-                    st.write(f"DEBUG: Loaded {len(df)} records from '{worksheet.title}'")
-                else:
-                    st.write(f"DEBUG: No records found in '{worksheet.title}'")
             except Exception as e:
-                st.warning(f"DEBUG: Error loading '{worksheet.title}': {str(e)}")
                 if config.DEBUG_MODE:
                     st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
                 continue
 
-        st.write(f"DEBUG: Loaded data from {len(all_data)} worksheets total")
-        
         if not all_data:
-            st.warning("DEBUG: No data loaded from any worksheet!")
             return pd.DataFrame()
 
         # Combine all data
         combined_df = pd.concat(all_data, ignore_index=True)
-        st.write(f"DEBUG: Combined dataframe has {len(combined_df)} total records")
 
         # Clean and process the data
         combined_df = process_vacuum_data(combined_df)
@@ -139,7 +121,6 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
         if days is not None:
             cutoff_date = datetime.now() - timedelta(days=days)
             combined_df = combined_df[combined_df['Timestamp'] >= cutoff_date]
-            st.write(f"DEBUG: After filtering to last {days} days: {len(combined_df)} records")
 
         return combined_df
 
@@ -214,12 +195,17 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
 def process_vacuum_data(df):
     """
     Clean and process vacuum data
+
+    CACHED: Processing is cached to avoid repeated computation
+
+    Args:
+        df: Raw DataFrame from Google Sheets
+
+    Returns:
+        Processed DataFrame with proper types and cleaned data
     """
     if df.empty:
         return df
-
-    st.write(f"DEBUG PROCESS: Starting with {len(df)} records")
-    st.write(f"DEBUG PROCESS: Columns: {list(df.columns)}")
 
     # Find timestamp/date column - try multiple possible names
     timestamp_col = None
@@ -228,31 +214,21 @@ def process_vacuum_data(df):
                           'Time', 'time']:
         if possible_name in df.columns:
             timestamp_col = possible_name
-            st.write(f"DEBUG PROCESS: Found timestamp column: '{timestamp_col}'")
             break
 
+    # Convert timestamp to datetime if found
     if timestamp_col:
-        st.write(f"DEBUG PROCESS: Sample values before conversion: {df[timestamp_col].head(3).tolist()}")
-        
-        # Convert timestamp to datetime
         df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
-        
-        st.write(f"DEBUG PROCESS: Sample values after conversion: {df['Timestamp'].head(3).tolist()}")
-        st.write(f"DEBUG PROCESS: Number of NaT values: {df['Timestamp'].isna().sum()}")
 
         # Add derived columns
         df['Date'] = df['Timestamp'].dt.date
         df['Hour'] = df['Timestamp'].dt.hour
 
         # Remove rows with invalid timestamps
-        before_drop = len(df)
         df = df.dropna(subset=['Timestamp'])
-        after_drop = len(df)
-        st.write(f"DEBUG PROCESS: Dropped {before_drop - after_drop} rows with invalid timestamps")
-        st.write(f"DEBUG PROCESS: Remaining records: {len(df)}")
     else:
-        st.write("DEBUG PROCESS: No timestamp column found!")
-        # No timestamp column found
+        # No timestamp column found - create a default one with current time
+        # This allows the dashboard to work even without timestamps
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
 
@@ -264,10 +240,6 @@ def process_vacuum_data(df):
     # Fill missing vacuum values
     for col in vacuum_cols:
         df[col] = df[col].fillna(config.FILL_MISSING_VACUUM)
-
-    st.write(f"DEBUG PROCESS: Final dataframe has {len(df)} records")
-    if len(df) > 0:
-        st.write(f"DEBUG PROCESS: Date range: {df['Timestamp'].min()} to {df['Timestamp'].max()}")
 
     return df
 
