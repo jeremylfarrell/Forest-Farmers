@@ -9,7 +9,6 @@ All complex logic has been moved to separate modules for better maintainability.
 import streamlit as st
 import os
 from datetime import datetime
-from dotenv import load_dotenv
 
 # Import configuration
 import config
