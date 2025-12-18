@@ -4,6 +4,8 @@ Main application entry point - refactored and modular
 
 This is the main dashboard file that orchestrates all pages and data loading.
 All complex logic has been moved to separate modules for better maintainability.
+
+UPDATED: Now works with both local .env files AND Streamlit Cloud secrets!
 """
 
 import streamlit as st
@@ -37,7 +39,49 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-load_dotenv()
+
+# ============================================================================
+# CONFIGURATION LOADING (Works for both local and cloud!)
+# ============================================================================
+
+def load_config():
+    """
+    Load configuration from either Streamlit secrets (cloud) or .env file (local)
+    Tries secrets first, falls back to .env
+    """
+    vacuum_url = None
+    personnel_url = None
+    credentials_path = 'credentials.json'
+    
+    # Try Streamlit secrets first (for Streamlit Cloud)
+    try:
+        if hasattr(st, 'secrets'):
+            vacuum_url = st.secrets.get("VACUUM_SHEET_URL")
+            personnel_url = st.secrets.get("PERSONNEL_SHEET_URL")
+            
+            if vacuum_url and personnel_url:
+                # Running on Streamlit Cloud with secrets configured
+                return vacuum_url, personnel_url, credentials_path
+    except (FileNotFoundError, KeyError):
+        pass
+    
+    # Fall back to .env file (for local development)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        vacuum_url = os.getenv('VACUUM_SHEET_URL')
+        personnel_url = os.getenv('PERSONNEL_SHEET_URL')
+        
+        if vacuum_url and personnel_url:
+            # Running locally with .env file
+            return vacuum_url, personnel_url, credentials_path
+    except ImportError:
+        # python-dotenv not installed (that's ok on Streamlit Cloud)
+        pass
+    
+    # If we get here, configuration is missing
+    return None, None, credentials_path
+
 
 # Apply custom styling
 apply_custom_css()
@@ -114,7 +158,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v4.1 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v4.2 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
         st.caption("Click 'Refresh Data' to reload")
 
@@ -128,18 +172,33 @@ def render_sidebar():
 def load_data(days_to_load):
     """Load data from Google Sheets"""
 
-    vacuum_url = os.getenv('VACUUM_SHEET_URL')
-    personnel_url = os.getenv('PERSONNEL_SHEET_URL')
-    credentials = 'credentials.json'
+    # Load configuration (works for both local and cloud!)
+    vacuum_url, personnel_url, credentials = load_config()
 
     # Validate configuration
     if not vacuum_url or not personnel_url:
-        st.error("⚠️ Sheet URLs not configured in .env file")
+        st.error("⚠️ Configuration Error")
+        st.info("""
+        **For Streamlit Cloud:** Add these to your app secrets:
+        ```
+        VACUUM_SHEET_URL = "your-vacuum-sheet-url"
+        PERSONNEL_SHEET_URL = "your-personnel-sheet-url"
+        ```
+        
+        **For Local Development:** Create a `.env` file with:
+        ```
+        VACUUM_SHEET_URL=your-vacuum-sheet-url
+        PERSONNEL_SHEET_URL=your-personnel-sheet-url
+        ```
+        """)
         st.stop()
 
+    # Check for credentials (local file check - on cloud this is handled by secrets)
     if not os.path.exists(credentials):
-        st.error(f"⚠️ Credentials file not found: {credentials}")
-        st.stop()
+        # On Streamlit Cloud, credentials come from secrets, not a file
+        # So this is only a warning for local development
+        st.warning(f"⚠️ Note: Local credentials file '{credentials}' not found")
+        st.info("On Streamlit Cloud, credentials should be in your app secrets under [gcp_service_account]")
 
     # Load data with progress indication
     with st.spinner('Loading data from Google Sheets...'):
@@ -148,6 +207,7 @@ def load_data(days_to_load):
             personnel_df = load_all_personnel_data(personnel_url, credentials, days=days_to_load)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
+            st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
             st.stop()
 
     return vacuum_df, personnel_df
