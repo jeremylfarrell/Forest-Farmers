@@ -69,64 +69,56 @@ def connect_to_sheets(credentials_file):
 
 @st.cache_data(ttl=3600, show_spinner="Loading vacuum data from cache...")
 def load_all_vacuum_data(sheet_url, credentials_file, days=None):
-    """
-    Load ALL vacuum data from all monthly tabs
-
-    CACHED: Data is cached for 1 hour to dramatically improve performance.
-    Switching between pages is instant after first load!
-
-    Args:
-        sheet_url: Google Sheet URL
-        credentials_file: Path to credentials JSON
-        days: If specified, only load last N days (None = all data)
-
-    Returns:
-        DataFrame with all vacuum readings
-    """
+    """Load ALL vacuum data from all monthly tabs"""
     try:
         client = connect_to_sheets(credentials_file)
         sheet = client.open_by_url(sheet_url)
 
         # Get all worksheets (monthly tabs)
         all_worksheets = sheet.worksheets()
+        
+        # ADD THIS DEBUG LINE:
+        st.write(f"DEBUG: Found {len(all_worksheets)} total worksheets")
+        st.write(f"DEBUG: Worksheet names: {[ws.title for ws in all_worksheets]}")
 
         all_data = []
 
         for worksheet in all_worksheets:
             # Skip any non-date worksheets (like instructions, etc.)
             if not is_month_tab(worksheet.title):
+                # ADD THIS DEBUG LINE:
+                st.write(f"DEBUG: Skipping worksheet '{worksheet.title}' - not a month tab")
                 continue
 
+            # ADD THIS DEBUG LINE:
+            st.write(f"DEBUG: Loading data from '{worksheet.title}'...")
+            
             try:
                 # Get data from this worksheet
                 data = worksheet.get_all_records()
                 if data:
                     df = pd.DataFrame(data)
                     all_data.append(df)
+                    # ADD THIS DEBUG LINE:
+                    st.write(f"DEBUG: Loaded {len(df)} records from '{worksheet.title}'")
             except Exception as e:
+                # ADD THIS DEBUG LINE:
+                st.warning(f"DEBUG: Error loading '{worksheet.title}': {str(e)}")
                 if config.DEBUG_MODE:
                     st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
                 continue
 
+        # ADD THIS DEBUG LINE:
+        st.write(f"DEBUG: Loaded data from {len(all_data)} worksheets total")
+        
         if not all_data:
             return pd.DataFrame()
 
         # Combine all data
         combined_df = pd.concat(all_data, ignore_index=True)
-
-        # Clean and process the data
-        combined_df = process_vacuum_data(combined_df)
-
-        # Filter by date if specified
-        if days is not None:
-            cutoff_date = datetime.now() - timedelta(days=days)
-            combined_df = combined_df[combined_df['Timestamp'] >= cutoff_date]
-
-        return combined_df
-
-    except Exception as e:
-        st.error(f"Error loading vacuum data: {str(e)}")
-        return pd.DataFrame()
+        
+        # ADD THIS DEBUG LINE:
+        st.write(f"DEBUG: Combined dataframe has {len(combined_df)} total records")
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading personnel data from cache...")
