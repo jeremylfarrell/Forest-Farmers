@@ -1,46 +1,68 @@
 """
-Interactive Sensor Map Page Module - FOLIUM VERSION
-Uses Folium for better navigation and topographic maps
-Includes OpenTopoMap with elevation contours and terrain details
+Interactive Map Page Module - MULTI-SITE POLISHED
+Geographic visualization of sensor locations with performance overlay
+Now with site color coding and legend
 """
 
 import streamlit as st
 import pandas as pd
-from streamlit_folium import st_folium
 import folium
-from folium import plugins
+from streamlit_folium import st_folium
 import config
 from utils import find_column, get_vacuum_column
 
 
-@st.cache_data(ttl=3600)
-def prepare_map_data(vacuum_df):
-    """
-    Prepare sensor data for mapping (cached for performance)
+def render(vacuum_df, personnel_df):
+    """Render interactive map with site-aware visualization"""
 
-    Args:
-        vacuum_df: Raw vacuum data
+    st.title("🌍 Interactive Sensor Map")
+    st.markdown("*Geographic visualization of sensor locations and performance*")
 
-    Returns:
-        DataFrame ready for mapping
-    """
+    if vacuum_df.empty:
+        st.warning("No vacuum data available for mapping")
+        return
+
+    # Check site context
+    has_site = 'Site' in vacuum_df.columns
+    viewing_site = None
+    
+    if has_site and len(vacuum_df['Site'].unique()) == 1:
+        viewing_site = vacuum_df['Site'].iloc[0]
+        site_emoji = "🟦" if viewing_site == "NY" else "🟩" if viewing_site == "VT" else "⚫"
+        st.info(f"{site_emoji} **Mapping {viewing_site} site** - {vacuum_df['Site'].value_counts()[viewing_site]:,} sensor readings")
+    elif has_site:
+        site_counts = vacuum_df['Site'].value_counts()
+        site_info = " | ".join([f"🟦 NY: {site_counts.get('NY', 0):,}" if s == 'NY' 
+                               else f"🟩 VT: {site_counts.get('VT', 0):,}" 
+                               for s in ['NY', 'VT'] if s in site_counts.index])
+        st.info(f"🗺️ **Multi-site map** - {site_info} readings")
+
     # Find required columns
-    sensor_col = find_column(
-        vacuum_df,
-        'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location'
-    )
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location')
     vacuum_col = get_vacuum_column(vacuum_df)
     lat_col = find_column(vacuum_df, 'Latitude', 'latitude', 'lat')
     lon_col = find_column(vacuum_df, 'Longitude', 'longitude', 'lon', 'long')
+
+    # Check for required columns
+    if not all([sensor_col, lat_col, lon_col]):
+        st.error("Missing required columns for mapping")
+        missing = []
+        if not sensor_col:
+            missing.append("Sensor name")
+        if not lat_col:
+            missing.append("Latitude")
+        if not lon_col:
+            missing.append("Longitude")
+        st.write(f"Missing: {', '.join(missing)}")
+        st.info("Available columns: " + ", ".join(vacuum_df.columns))
+        return
+
+    # Get latest reading per sensor
     timestamp_col = find_column(
         vacuum_df,
         'Last communication', 'Last Communication', 'Timestamp', 'timestamp'
     )
 
-    if not all([sensor_col, vacuum_col, lat_col, lon_col]):
-        return None, None
-
-    # Get latest reading per sensor
     if timestamp_col:
         temp_df = vacuum_df.copy()
         temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
@@ -48,377 +70,268 @@ def prepare_map_data(vacuum_df):
     else:
         latest = vacuum_df.groupby(sensor_col).first().reset_index()
 
-    # Prepare data for mapping
-    map_data = latest[[sensor_col, vacuum_col, lat_col, lon_col]].copy()
-    map_data.columns = ['Sensor', 'Vacuum', 'Latitude', 'Longitude']
-
-    # Convert to numeric
+    # Clean data
+    map_data = latest[[sensor_col, lat_col, lon_col]].copy()
+    if vacuum_col:
+        map_data[vacuum_col] = latest[vacuum_col]
+    if has_site:
+        map_data['Site'] = latest['Site']
+    
+    map_data.columns = ['Sensor', 'Latitude', 'Longitude'] + ([vacuum_col] if vacuum_col else []) + (['Site'] if has_site else [])
+    
+    # Convert to numeric and clean
     map_data['Latitude'] = pd.to_numeric(map_data['Latitude'], errors='coerce')
     map_data['Longitude'] = pd.to_numeric(map_data['Longitude'], errors='coerce')
-    map_data['Vacuum'] = pd.to_numeric(map_data['Vacuum'], errors='coerce')
-
-    # Filter out invalid coordinates
-    original_count = len(map_data)
-    map_data = map_data[
-        (map_data['Latitude'].notna()) &
-        (map_data['Longitude'].notna()) &
-        (map_data['Latitude'] != 0) &
-        (map_data['Longitude'] != 0) &
-        (map_data['Latitude'].between(40, 45)) &
-        (map_data['Longitude'].between(-80, -72))
-        ]
-
-    filtered_count = original_count - len(map_data)
-
-    # Add status category for coloring
-    def get_status_category(vacuum):
-        if vacuum >= config.VACUUM_EXCELLENT:
-            return "Excellent"
-        elif vacuum >= config.VACUUM_FAIR:
-            return "Fair"
-        else:
-            return "Poor"
-
-    map_data['Status'] = map_data['Vacuum'].apply(get_status_category)
-
-    return map_data, filtered_count
-
-
-def get_marker_color(status):
-    """Get marker color based on status"""
-    if status == "Excellent":
-        return "green"
-    elif status == "Fair":
-        return "orange"
-    else:
-        return "red"
-
-
-def create_folium_map(data, map_style, show_clusters=False):
-    """
-    Create a Folium map with sensors
-
-    Args:
-        data: Filtered sensor data
-        map_style: Selected map style
-        show_clusters: Whether to cluster markers
-
-    Returns:
-        Folium map object
-    """
-    # Calculate center
-    center_lat = data['Latitude'].mean()
-    center_lon = data['Longitude'].mean()
-
-    # Create base map
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=12,
-        tiles=None  # We'll add tiles manually for more control
-    )
-
-    # Add different tile layers based on selection
-    if map_style == "Topographic (OpenTopoMap)":
-        folium.TileLayer(
-            tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-            attr='Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap',
-            name='OpenTopoMap',
-            overlay=False,
-            control=True,
-            max_zoom=17
-        ).add_to(m)
-    elif map_style == "Street Map":
-        folium.TileLayer(
-            tiles='OpenStreetMap',
-            name='Street Map',
-            overlay=False,
-            control=True
-        ).add_to(m)
-    elif map_style == "Terrain":
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-            attr='Tiles © Esri',
-            name='Esri World Topo',
-            overlay=False,
-            control=True
-        ).add_to(m)
-    elif map_style == "Satellite (Esri)":
-        folium.TileLayer(
-            tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            attr='Tiles © Esri',
-            name='Esri Satellite',
-            overlay=False,
-            control=True
-        ).add_to(m)
-
-    # Add markers
-    if show_clusters:
-        # Use marker clustering for lots of sensors
-        marker_cluster = plugins.MarkerCluster().add_to(m)
-
-        for idx, row in data.iterrows():
-            folium.Marker(
-                location=[row['Latitude'], row['Longitude']],
-                popup=folium.Popup(
-                    f"""<b>{row['Sensor']}</b><br>
-                    Vacuum: {row['Vacuum']:.1f}"<br>
-                    Status: {row['Status']}""",
-                    max_width=200
-                ),
-                tooltip=f"{row['Sensor']}: {row['Vacuum']:.1f}\"",
-                icon=folium.Icon(color=get_marker_color(row['Status']), icon='info-sign')
-            ).add_to(marker_cluster)
-    else:
-        # Add individual markers
-        for idx, row in data.iterrows():
-            folium.CircleMarker(
-                location=[row['Latitude'], row['Longitude']],
-                radius=8,
-                popup=folium.Popup(
-                    f"""<b>{row['Sensor']}</b><br>
-                    Vacuum: {row['Vacuum']:.1f}"<br>
-                    Status: {row['Status']}""",
-                    max_width=200
-                ),
-                tooltip=f"{row['Sensor']}: {row['Vacuum']:.1f}\"",
-                color='white',
-                fillColor=get_marker_color(row['Status']),
-                fillOpacity=0.7,
-                weight=2
-            ).add_to(m)
-
-    # Add fullscreen button
-    plugins.Fullscreen(
-        position='topright',
-        title='Fullscreen',
-        title_cancel='Exit fullscreen',
-        force_separate_button=True
-    ).add_to(m)
-
-    # Add measure control
-    plugins.MeasureControl(position='topleft', primary_length_unit='miles').add_to(m)
-
-    # Add minimap
-    minimap = plugins.MiniMap(toggle_display=True)
-    m.add_child(minimap)
-
-    # Add layer control if multiple base maps
-    folium.LayerControl().add_to(m)
-
-    # Add legend
-    legend_html = '''
-    <div style="position: fixed; 
-                bottom: 50px; right: 50px; width: 150px; height: 110px; 
-                background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:14px; padding: 10px">
-    <p style="margin:0"><b>Vacuum Status</b></p>
-    <p style="margin:5px 0"><span style="color:green">●</span> Excellent (≥{:.0f}")</p>
-    <p style="margin:5px 0"><span style="color:orange">●</span> Fair ({:.0f}"-{:.0f}")</p>
-    <p style="margin:5px 0"><span style="color:red">●</span> Poor (<{:.0f}")</p>
-    </div>
-    '''.format(config.VACUUM_EXCELLENT, config.VACUUM_FAIR, config.VACUUM_EXCELLENT, config.VACUUM_FAIR)
-
-    m.get_root().html.add_child(folium.Element(legend_html))
-
-    return m
-
-
-def render(vacuum_df, personnel_df):
-    """Render interactive sensor map page with Folium"""
-
-    st.title("🗺️ Interactive Sensor Map")
-    st.markdown("*Enhanced mapping with topographic detail*")
-
-    if vacuum_df.empty:
-        st.warning("No vacuum data available")
-        return
-
-    # Prepare data (cached)
-    map_data, filtered_count = prepare_map_data(vacuum_df)
-
-    if map_data is None:
-        st.error("Required columns (sensor name, vacuum, latitude, longitude) not found")
-        st.info("Available columns: " + ", ".join(vacuum_df.columns))
-        return
-
-    if filtered_count > 0:
-        st.info(
-            f"📊 Showing {len(map_data)} sensors with valid coordinates (filtered out {filtered_count} with missing/invalid coordinates)")
+    if vacuum_col:
+        map_data['Vacuum'] = pd.to_numeric(map_data[vacuum_col], errors='coerce')
+    
+    map_data = map_data.dropna(subset=['Latitude', 'Longitude'])
 
     if map_data.empty:
         st.warning("No sensors with valid coordinates found")
-        st.info("""
-        **Possible reasons:**
-        - Latitude/Longitude columns are empty
-        - Coordinates are 0,0 (invalid)
-        - Coordinates outside NY state range (40-45°N, -80 to -72°W)
-
-        Check your vacuum data sheet to ensure GPS coordinates are populated.
-        """)
         return
 
-    # Controls
-    st.subheader("🔧 Map Controls")
-
+    # Map controls
     col1, col2, col3 = st.columns(3)
 
     with col1:
         map_style = st.selectbox(
             "Map Style",
-            options=[
-                "Topographic (OpenTopoMap)",  # Best option!
-                "Terrain",
-                "Satellite (Esri)",
-                "Street Map"
-            ],
-            index=0,
-            help="OpenTopoMap shows elevation contours and terrain features"
+            ["Terrain", "Satellite", "Street"],
+            help="Choose map background"
         )
 
     with col2:
-        show_clusters = st.checkbox(
-            "🎯 Cluster Markers",
-            value=len(map_data) > 100,
-            help="Group nearby sensors into clusters. Uncheck to see all individual markers."
-        )
-        if show_clusters:
-            st.caption("✓ Clustering enabled - click clusters to expand")
+        if vacuum_col:
+            color_by = st.selectbox(
+                "Color Markers By",
+                ["Vacuum Performance", "Site"] if has_site else ["Vacuum Performance"],
+                help="How to color the sensor markers"
+            )
         else:
-            st.caption("⚠️ Showing all markers individually")
+            color_by = "Site" if has_site else None
 
     with col3:
-        status_filter = st.multiselect(
-            "Filter by Status",
-            options=["Excellent", "Fair", "Poor"],
-            default=["Excellent", "Fair", "Poor"]
+        marker_size = st.slider(
+            "Marker Size",
+            min_value=5,
+            max_value=15,
+            value=8,
+            help="Size of markers on map"
         )
 
-    # Apply status filter
-    filtered_data = map_data[map_data['Status'].isin(status_filter)].copy()
+    st.divider()
+
+    # Create map
+    # Calculate center and zoom
+    center_lat = map_data['Latitude'].mean()
+    center_lon = map_data['Longitude'].mean()
+
+    # Determine tile layer based on style
+    if map_style == "Satellite":
+        tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+        attr = 'Esri'
+    elif map_style == "Terrain":
+        tiles = 'OpenTopoMap'
+        attr = 'OpenTopoMap'
+    else:
+        tiles = 'OpenStreetMap'
+        attr = 'OpenStreetMap'
+
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=13,
+        tiles=tiles,
+        attr=attr
+    )
+
+    # Add legend if multi-site
+    if has_site and color_by == "Site":
+        legend_html = '''
+        <div style="position: fixed; 
+                    top: 10px; right: 10px; width: 150px; height: auto; 
+                    background-color: white; border:2px solid grey; z-index:9999; 
+                    font-size:14px; padding: 10px; border-radius: 5px;">
+        <p style="margin: 0; font-weight: bold; text-align: center;">Site Legend</p>
+        <p style="margin: 5px 0;"><span style="color: #2196F3; font-size: 20px;">●</span> NY</p>
+        <p style="margin: 5px 0;"><span style="color: #4CAF50; font-size: 20px;">●</span> VT</p>
+        <p style="margin: 5px 0;"><span style="color: #9E9E9E; font-size: 20px;">●</span> UNK</p>
+        </div>
+        '''
+        m.get_root().html.add_child(folium.Element(legend_html))
+
+    # Add markers
+    for idx, row in map_data.iterrows():
+        # Determine marker color
+        if color_by == "Vacuum Performance" and vacuum_col and 'Vacuum' in row:
+            vacuum = row['Vacuum']
+            if pd.notna(vacuum):
+                if vacuum >= config.VACUUM_EXCELLENT:
+                    color = 'green'
+                    status = f"🟢 Excellent ({vacuum:.1f}\")"
+                elif vacuum >= config.VACUUM_FAIR:
+                    color = 'orange'
+                    status = f"🟡 Fair ({vacuum:.1f}\")"
+                else:
+                    color = 'red'
+                    status = f"🔴 Poor ({vacuum:.1f}\")"
+            else:
+                color = 'gray'
+                status = "No reading"
+        elif color_by == "Site" and has_site and 'Site' in row:
+            site = row['Site']
+            if site == 'NY':
+                color = 'blue'
+                status = "🟦 NY Site"
+            elif site == 'VT':
+                color = 'green'
+                status = "🟩 VT Site"
+            else:
+                color = 'gray'
+                status = "⚫ Unknown Site"
+        else:
+            color = 'blue'
+            status = "Sensor"
+
+        # Create popup
+        popup_html = f"""
+        <div style="font-family: Arial; min-width: 200px;">
+            <h4 style="margin: 0 0 10px 0;">{row['Sensor']}</h4>
+        """
+        
+        if has_site and 'Site' in row:
+            site_emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
+            popup_html += f"<p style='margin: 5px 0;'><b>Site:</b> {site_emoji} {row['Site']}</p>"
+        
+        if vacuum_col and 'Vacuum' in row and pd.notna(row['Vacuum']):
+            popup_html += f"<p style='margin: 5px 0;'><b>Vacuum:</b> {row['Vacuum']:.1f}\"</p>"
+            popup_html += f"<p style='margin: 5px 0;'><b>Status:</b> {status}</p>"
+        
+        popup_html += f"""
+            <p style='margin: 5px 0; font-size: 11px; color: gray;'>
+                Lat: {row['Latitude']:.6f}, Lon: {row['Longitude']:.6f}
+            </p>
+        </div>
+        """
+
+        folium.CircleMarker(
+            location=[row['Latitude'], row['Longitude']],
+            radius=marker_size,
+            popup=folium.Popup(popup_html, max_width=300),
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.7,
+            weight=2
+        ).add_to(m)
+
+    # Display map
+    st_folium(m, width=None, height=600)
 
     st.divider()
 
     # Summary stats
+    st.subheader("📊 Map Summary")
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Total Sensors", len(filtered_data))
+        st.metric("Total Sensors", len(map_data))
 
     with col2:
-        excellent = len(filtered_data[filtered_data['Status'] == 'Excellent'])
-        st.metric("🟢 Excellent", excellent)
+        if vacuum_col and 'Vacuum' in map_data.columns:
+            avg_vacuum = map_data['Vacuum'].mean()
+            st.metric("Avg Vacuum", f"{avg_vacuum:.1f}\"")
 
     with col3:
-        fair = len(filtered_data[filtered_data['Status'] == 'Fair'])
-        st.metric("🟡 Fair", fair)
+        lat_range = map_data['Latitude'].max() - map_data['Latitude'].min()
+        st.metric("Latitude Range", f"{lat_range:.4f}°")
 
     with col4:
-        poor = len(filtered_data[filtered_data['Status'] == 'Poor'])
-        st.metric("🔴 Poor", poor)
-
-    if filtered_data.empty:
-        st.warning("No sensors match the current filters")
-        return
-
-    st.divider()
-
-    # Create and display map
-    st.subheader(f"📍 Sensor Locations ({len(filtered_data)} sensors)")
-
-    # Map creation is actually fast - it's the data processing that's slow
-    # Data is already cached by @st.cache_data decorator on prepare_map_data()
-    with st.spinner("Rendering map..."):
-        folium_map = create_folium_map(filtered_data, map_style, show_clusters)
-
-    # Display map (height=650 for good visibility)
-    # Note: st_folium needs a fresh map object each time
-    st_folium(folium_map, width=None, height=650)
-
-    # Map features info
-    st.info("""
-    🧭 **Map Features:**
-    - **Pan**: Click and drag
-    - **Zoom**: Mouse wheel or +/- buttons
-    - **Fullscreen**: Button in top-right
-    - **Measure**: Ruler tool in top-left (measure distances)
-    - **Minimap**: Small overview map in bottom-left
-    - **Marker Info**: Click any marker for details
-    - **Layer Control**: Top-right to switch base maps
-
-    🗻 **Topographic Map** (recommended) shows:
-    - Elevation contour lines
-    - Terrain shading
-    - Hills and valleys
-    - Forests and land use
-    - All roads and paths
-
-    ⚡ **Performance:**
-    - Sensor data is cached for 1 hour (fast reloading!)
-    - Map tiles cached by your browser
-    - First load after data refresh: 3-5 seconds
-    - Subsequent loads: Much faster!
-    - Uncheck "Cluster Markers" to see all sensors individually
-    """)
-
-    st.divider()
-
-    # Data table
-    with st.expander("📊 View Sensor Data Table"):
-        display = filtered_data.copy()
-        display['Vacuum'] = display['Vacuum'].apply(lambda x: f"{x:.1f}\"")
-        display = display.sort_values('Status', ascending=False)
-        display = display[['Sensor', 'Status', 'Vacuum', 'Latitude', 'Longitude']]
-
-        st.dataframe(display, use_container_width=True, hide_index=True, height=400)
-
-        csv = display.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Sensor Data as CSV",
-            data=csv,
-            file_name="sensor_locations.csv",
-            mime="text/csv"
-        )
-
-    st.divider()
-
-    # Geographic Analysis
-    st.subheader("📐 Geographic Analysis")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown("**Vacuum Statistics**")
-        st.metric("Average Vacuum", f"{filtered_data['Vacuum'].mean():.1f}\"")
-        st.metric("Highest Vacuum", f"{filtered_data['Vacuum'].max():.1f}\"")
-        st.metric("Lowest Vacuum", f"{filtered_data['Vacuum'].min():.1f}\"")
-
-    with col2:
-        st.markdown("**Geographic Spread**")
-        lat_range = filtered_data['Latitude'].max() - filtered_data['Latitude'].min()
-        lon_range = filtered_data['Longitude'].max() - filtered_data['Longitude'].min()
-
-        st.metric("Latitude Range", f"{lat_range:.4f}°")
+        lon_range = map_data['Longitude'].max() - map_data['Longitude'].min()
         st.metric("Longitude Range", f"{lon_range:.4f}°")
 
-        center_lat = filtered_data['Latitude'].mean()
-        center_lon = filtered_data['Longitude'].mean()
-        st.caption(f"**Center:** {center_lat:.6f}, {center_lon:.6f}")
+    # Site-specific stats if viewing all
+    if has_site and not viewing_site:
+        st.markdown("**Sensors by Site:**")
+        
+        site_stats = map_data.groupby('Site').agg({
+            'Sensor': 'count',
+            'Vacuum': 'mean' if 'Vacuum' in map_data.columns else 'count'
+        }).reset_index()
+        
+        if 'Vacuum' in map_data.columns:
+            site_stats.columns = ['Site', 'Count', 'Avg_Vacuum']
+        else:
+            site_stats.columns = ['Site', 'Count']
+        
+        cols = st.columns(len(site_stats))
+        for idx, row in site_stats.iterrows():
+            with cols[idx]:
+                emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
+                st.metric(f"{emoji} {row['Site']}", f"{int(row['Count'])} sensors")
+                if 'Avg_Vacuum' in row:
+                    st.caption(f"Avg: {row['Avg_Vacuum']:.1f}\"")
 
-        area_sq_miles = (lat_range * 69) * (lon_range * 53)
-        st.metric("Approx. Coverage", f"{area_sq_miles:.1f} sq mi")
+    st.divider()
 
-    # Problem areas
-    poor_sensors = filtered_data[filtered_data['Status'] == 'Poor']
-
-    if not poor_sensors.empty:
-        st.divider()
-        st.subheader("⚠️ Problem Areas Requiring Attention")
-
-        st.markdown(f"**{len(poor_sensors)} sensors below {config.VACUUM_FAIR}\"**")
-
-        worst = poor_sensors.nsmallest(10, 'Vacuum')
-        display_worst = worst[['Sensor', 'Vacuum', 'Latitude', 'Longitude']].copy()
-        display_worst['Vacuum'] = display_worst['Vacuum'].apply(lambda x: f"{x:.1f}\"")
-        display_worst.insert(0, 'Priority', range(1, len(display_worst) + 1))
-
-        st.dataframe(display_worst, use_container_width=True, hide_index=True)
+    # Tips
+    with st.expander("💡 Using the Interactive Map"):
+        st.markdown("""
+        **Map Features:**
+        
+        - **Click markers** for detailed sensor information
+        - **Zoom/Pan** to explore specific areas
+        - **Color coding** shows performance or site at a glance
+        - **Site legend** (when viewing all sites) helps identify locations
+        
+        **Map Styles:**
+        
+        - **Terrain**: Shows elevation and topography (useful for planning routes)
+        - **Satellite**: Aerial imagery (identify actual tree locations)
+        - **Street**: Road network (useful for access planning)
+        
+        **Color Modes:**
+        
+        When coloring by **Vacuum Performance**:
+        - 🟢 Green: Excellent (≥18")
+        - 🟡 Orange: Fair (15-18")
+        - 🔴 Red: Poor (<15")
+        
+        When coloring by **Site**:
+        - 🟦 Blue: NY site
+        - 🟩 Green: VT site
+        - ⚫ Gray: Unknown site
+        
+        **Multi-Site Viewing:**
+        
+        When viewing all sites:
+        - See both NY and VT on same map
+        - Site legend in top-right corner
+        - Color by site to see site boundaries
+        - Useful for understanding geographic separation
+        
+        When viewing single site:
+        - Focused view of one location
+        - Color by vacuum performance recommended
+        - Easier to spot problem areas
+        - Better for daily operations
+        
+        **Practical Uses:**
+        
+        - **Dispatch Planning**: Identify clusters of poor-performing sensors
+        - **Route Planning**: Plan efficient maintenance routes
+        - **Problem Areas**: Spot geographic patterns in issues
+        - **Site Comparison**: See how sites differ geographically
+        - **Crew Assignment**: Visualize which areas to assign to which crew
+        - **Access Planning**: Identify difficult-to-reach sensors
+        
+        **Tips:**
+        
+        - Use terrain mode to plan walking routes
+        - Color by vacuum to find problem areas quickly
+        - Color by site when planning multi-site work
+        - Click sensors to get exact coordinates
+        - Screenshot map for crew navigation
+        - Compare maps between sites for patterns
+        """)
