@@ -1,13 +1,15 @@
 """
-Data Loader Module
-Handles loading and processing data from Google Sheets
+Data Loader Module - MULTI-SITE VERSION
+Handles loading and processing data from Google Sheets for NY and VT sites
 All data loading logic is centralized here for easy maintenance
 
 PERFORMANCE: Now includes caching for dramatic speed improvements!
 - Data cached for 1 hour (auto-refresh)
 - Manual refresh available via dashboard button
 
-UPDATED: Now works with both local credentials AND Streamlit Cloud secrets!
+MULTI-SITE: Supports separate vacuum data for NY and VT sites
+- Loads both sites and adds 'Site' column
+- Parses personnel site from Job column
 """
 
 import pandas as pd
@@ -25,7 +27,7 @@ def connect_to_sheets(credentials_file):
     """
     Connect to Google Sheets with authentication
     Works with BOTH local credentials file AND Streamlit Cloud secrets!
-    
+
     NOTE: No caching to avoid auth issues
 
     Args:
@@ -40,14 +42,14 @@ def connect_to_sheets(credentials_file):
     ]
 
     credentials_dict = None
-    
+
     # Try Streamlit secrets first (for Streamlit Cloud)
     try:
         if hasattr(st, 'secrets') and 'gcp_service_account' in st.secrets:
             credentials_dict = dict(st.secrets['gcp_service_account'])
     except (FileNotFoundError, KeyError, AttributeError):
         pass
-    
+
     # Fall back to local credentials file (for local development)
     if credentials_dict is None:
         if not os.path.exists(credentials_file):
@@ -56,32 +58,98 @@ def connect_to_sheets(credentials_file):
                 f"For Streamlit Cloud: Add credentials to app secrets under [gcp_service_account]\n"
                 f"For Local Development: Need '{credentials_file}' file in your project folder"
             )
-        
+
         with open(credentials_file, 'r') as f:
             credentials_dict = json.load(f)
-    
+
     # Create credentials and authorize (works with dict from either source)
     creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
     client = gspread.authorize(creds)
-    
+
     return client
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading vacuum data from cache...")
-def load_all_vacuum_data(sheet_url, credentials_file, days=None):
+def parse_site_from_job(job_text):
     """
-    Load ALL vacuum data from all monthly tabs
+    Parse site location from job description
+
+    Args:
+        job_text: Job description string (e.g., "Training/Meetings - VT Woods- 241121")
+
+    Returns:
+        "NY", "VT", or "UNK" (unknown)
+    """
+    if pd.isna(job_text):
+        return "UNK"
+
+    job_upper = str(job_text).upper()
+
+    # Check for VT
+    if "VT" in job_upper:
+        return "VT"
+    # Check for NY
+    elif "NY" in job_upper:
+        return "NY"
+    else:
+        return "UNK"
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading vacuum data from cache...")
+def load_all_vacuum_data(ny_sheet_url, vt_sheet_url, credentials_file, days=None):
+    """
+    Load ALL vacuum data from both NY and VT sheets
+    Combines data from both sites and adds 'Site' column
 
     CACHED: Data is cached for 1 hour to dramatically improve performance.
     Switching between pages is instant after first load!
 
     Args:
-        sheet_url: Google Sheet URL
+        ny_sheet_url: Google Sheet URL for NY vacuum data
+        vt_sheet_url: Google Sheet URL for VT vacuum data
         credentials_file: Path to credentials JSON
         days: If specified, only load last N days (None = all data)
 
     Returns:
-        DataFrame with all vacuum readings
+        DataFrame with all vacuum readings from both sites, with 'Site' column
+    """
+    all_sites_data = []
+
+    # Load NY site data
+    try:
+        ny_data = _load_vacuum_from_single_site(ny_sheet_url, credentials_file, days, site_name="NY")
+        if not ny_data.empty:
+            all_sites_data.append(ny_data)
+    except Exception as e:
+        st.warning(f"Error loading NY vacuum data: {str(e)}")
+
+    # Load VT site data
+    try:
+        vt_data = _load_vacuum_from_single_site(vt_sheet_url, credentials_file, days, site_name="VT")
+        if not vt_data.empty:
+            all_sites_data.append(vt_data)
+    except Exception as e:
+        st.warning(f"Error loading VT vacuum data: {str(e)}")
+
+    # Combine all sites
+    if not all_sites_data:
+        return pd.DataFrame()
+
+    combined_df = pd.concat(all_sites_data, ignore_index=True)
+    return combined_df
+
+
+def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_name="Unknown"):
+    """
+    Load vacuum data from a single site's Google Sheet
+
+    Args:
+        sheet_url: Google Sheet URL
+        credentials_file: Path to credentials JSON
+        days: If specified, only load last N days
+        site_name: Name of the site (NY, VT, etc.)
+
+    Returns:
+        DataFrame with vacuum readings and 'Site' column added
     """
     try:
         client = connect_to_sheets(credentials_file)
@@ -105,7 +173,7 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
                     all_data.append(df)
             except Exception as e:
                 if config.DEBUG_MODE:
-                    st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
+                    st.warning(f"Skipped worksheet '{worksheet.title}' in {site_name}: {str(e)}")
                 continue
 
         if not all_data:
@@ -117,15 +185,18 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
         # Clean and process the data
         combined_df = process_vacuum_data(combined_df)
 
+        # Add site column
+        combined_df['Site'] = site_name
+
         # Filter by date if specified
-        if days is not None:
+        if days is not None and 'Timestamp' in combined_df.columns:
             cutoff_date = datetime.now() - timedelta(days=days)
             combined_df = combined_df[combined_df['Timestamp'] >= cutoff_date]
 
         return combined_df
 
     except Exception as e:
-        st.error(f"Error loading vacuum data: {str(e)}")
+        st.error(f"Error loading {site_name} vacuum data: {str(e)}")
         return pd.DataFrame()
 
 
@@ -133,6 +204,7 @@ def load_all_vacuum_data(sheet_url, credentials_file, days=None):
 def load_all_personnel_data(sheet_url, credentials_file, days=None):
     """
     Load ALL personnel data from all monthly tabs
+    Adds 'Site' column based on Job description parsing
 
     CACHED: Data is cached for 1 hour to dramatically improve performance.
     Switching between pages is instant after first load!
@@ -143,7 +215,7 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         days: If specified, only load last N days (None = all data)
 
     Returns:
-        DataFrame with all personnel timesheet data
+        DataFrame with all personnel timesheet data including 'Site' column
     """
     try:
         client = connect_to_sheets(credentials_file)
@@ -180,7 +252,7 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         combined_df = process_personnel_data(combined_df)
 
         # Filter by date if specified
-        if days is not None:
+        if days is not None and 'Date' in combined_df.columns:
             cutoff_date = datetime.now() - timedelta(days=days)
             combined_df = combined_df[combined_df['Date'] >= cutoff_date]
 
@@ -248,6 +320,7 @@ def process_vacuum_data(df):
 def process_personnel_data(df):
     """
     Clean and process personnel data
+    Adds 'Site' column based on Job description
 
     CACHED: Processing is cached to avoid repeated computation
 
@@ -255,7 +328,7 @@ def process_personnel_data(df):
         df: Raw DataFrame from Google Sheets
 
     Returns:
-        Processed DataFrame with proper types and cleaned data
+        Processed DataFrame with proper types, cleaned data, and 'Site' column
     """
     if df.empty:
         return df
@@ -283,6 +356,13 @@ def process_personnel_data(df):
     mainline_cols = [col for col in df.columns if 'mainline' in col.lower()]
     if mainline_cols:
         df['mainline'] = df[mainline_cols[0]]
+
+    # Parse site from Job column
+    if 'Job' in df.columns:
+        df['Site'] = df['Job'].apply(parse_site_from_job)
+    else:
+        # If no Job column, default to UNK
+        df['Site'] = 'UNK'
 
     # Remove rows with invalid dates
     if 'Date' in df.columns:
