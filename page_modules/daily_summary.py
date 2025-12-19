@@ -1,6 +1,6 @@
 """
-Daily Operations Summary Page Module
-Quick morning briefing with actionable recommendations
+Daily Operations Summary Page Module - MULTI-SITE ENHANCED
+Quick morning briefing with actionable recommendations and site breakdowns
 """
 
 import streamlit as st
@@ -59,7 +59,7 @@ def calculate_sap_likelihood_today(high, low):
 
 
 def get_critical_sensors(vacuum_df, threshold=config.VACUUM_FAIR):
-    """Get sensors below threshold"""
+    """Get sensors below threshold with site information"""
     if vacuum_df.empty:
         return pd.DataFrame()
 
@@ -85,16 +85,25 @@ def get_critical_sensors(vacuum_df, threshold=config.VACUUM_FAIR):
     problems = latest[pd.to_numeric(latest[vacuum_col], errors='coerce') < threshold].copy()
     problems['Vacuum'] = pd.to_numeric(problems[vacuum_col], errors='coerce')
     problems['Sensor'] = problems[sensor_col]
-
-    return problems[['Sensor', 'Vacuum']].sort_values('Vacuum')
+    
+    # Add site if available
+    if 'Site' in problems.columns:
+        result = problems[['Sensor', 'Vacuum', 'Site']].sort_values('Vacuum')
+    else:
+        result = problems[['Sensor', 'Vacuum']].sort_values('Vacuum')
+    
+    return result
 
 
 def generate_action_plan(vacuum_df, personnel_df, weather):
-    """Generate realistic daily action plan"""
+    """Generate realistic daily action plan with site information"""
     actions = []
 
     # Get critical sensors
     critical = get_critical_sensors(vacuum_df)
+    
+    # Check if we have site information
+    has_site = 'Site' in critical.columns if not critical.empty else False
 
     # Weather-based actions
     if weather:
@@ -119,23 +128,45 @@ def generate_action_plan(vacuum_df, personnel_df, weather):
                 'recommendation': '✓ Focus on repairs and maintenance\n✓ Good day to fix problem sensors\n✓ Prepare for better days ahead'
             })
 
-    # Critical sensor actions
+    # Critical sensor actions with site breakdown
     if not critical.empty and len(critical) <= 5:
-        sensor_list = ', '.join(critical['Sensor'].head(5).tolist())
+        if has_site:
+            # Group by site for better dispatch
+            site_breakdown = critical.groupby('Site')['Sensor'].apply(list).to_dict()
+            detail_parts = []
+            for site, sensors in site_breakdown.items():
+                site_emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
+                detail_parts.append(f"{site_emoji} {site}: {', '.join(sensors[:2])}")
+            detail = "Urgent attention needed:\n" + "\n".join(detail_parts)
+        else:
+            sensor_list = ', '.join(critical['Sensor'].head(5).tolist())
+            detail = f"Urgent attention needed: {sensor_list}"
+            
         actions.append({
             'priority': 1,
             'category': '🔴 Critical',
             'action': f'Fix {len(critical)} critical sensor(s)',
-            'detail': f"Urgent attention needed: {sensor_list}",
+            'detail': detail,
             'time_estimate': f'{len(critical) * 2}h',
             'recommendation': f'✓ Inspect these {len(critical)} locations first\n✓ Check for leaks and damaged lines\n✓ Test releasers'
         })
     elif not critical.empty:
+        if has_site:
+            # Show site breakdown for large problem counts
+            site_counts = critical['Site'].value_counts()
+            breakdown = ", ".join([f"🟦 NY: {site_counts.get('NY', 0)}" if s == 'NY' 
+                                 else f"🟩 VT: {site_counts.get('VT', 0)}" if s == 'VT'
+                                 else f"⚫ UNK: {site_counts.get('UNK', 0)}"
+                                 for s in site_counts.index])
+            detail = f'Too many for one day ({breakdown}) - prioritize worst'
+        else:
+            detail = 'Too many for one day - prioritize worst'
+            
         actions.append({
             'priority': 1,
             'category': '🔴 Critical',
             'action': f'System has {len(critical)} problem sensors',
-            'detail': 'Too many for one day - prioritize worst',
+            'detail': detail,
             'time_estimate': 'Full day',
             'recommendation': f'✓ Start with worst 5 sensors\n✓ Categorize by geographic area\n✓ Schedule remaining for tomorrow'
         })
@@ -164,7 +195,7 @@ def generate_action_plan(vacuum_df, personnel_df, weather):
                 'recommendation': '✓ Check sensor power/connectivity\n✓ Verify network connection\n✓ May need sensor replacement'
             })
 
-    # Personnel-based actions
+    # Personnel-based actions with site awareness
     if not personnel_df.empty:
         date_col = find_column(personnel_df, 'Date', 'date', 'timestamp')
         if date_col:
@@ -175,11 +206,24 @@ def generate_action_plan(vacuum_df, personnel_df, weather):
                 emp_col = find_column(yesterday_work, 'Employee Name', 'employee', 'name')
                 if emp_col:
                     emp_count = yesterday_work[emp_col].nunique()
+                    
+                    # Add site breakdown if available
+                    detail = 'Review their work effectiveness'
+                    if 'Site' in yesterday_work.columns:
+                        site_counts = yesterday_work['Site'].value_counts()
+                        site_info = []
+                        for site in ['NY', 'VT', 'UNK']:
+                            if site in site_counts.index:
+                                emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
+                                site_info.append(f"{emoji} {site}: {site_counts[site]} sessions")
+                        if site_info:
+                            detail = f"Work distribution:\n" + "\n".join(site_info)
+                    
                     actions.append({
                         'priority': 3,
                         'category': '📊 Info',
                         'action': f'{emp_count} employee(s) worked yesterday',
-                        'detail': 'Review their work effectiveness',
+                        'detail': detail,
                         'time_estimate': '15min',
                         'recommendation': '✓ Check Employee Effectiveness page\n✓ Verify vacuum improvements\n✓ Provide feedback'
                     })
@@ -201,13 +245,17 @@ def generate_action_plan(vacuum_df, personnel_df, weather):
 
 
 def render(vacuum_df, personnel_df):
-    """Render daily operations summary page"""
+    """Render daily operations summary page with site awareness"""
 
     st.title("📱 Daily Operations Summary")
     current_time = datetime.now()
     st.markdown(f"*{current_time.strftime('%A, %B %d, %Y - %I:%M %p')}*")
 
-    # Quick stats banner
+    # Check if we have multi-site data
+    has_vacuum_site = 'Site' in vacuum_df.columns if not vacuum_df.empty else False
+    has_personnel_site = 'Site' in personnel_df.columns if not personnel_df.empty else False
+    
+    # Quick stats banner with site breakdown
     st.markdown("---")
     col1, col2, col3, col4 = st.columns(4)
 
@@ -216,7 +264,15 @@ def render(vacuum_df, personnel_df):
             sensor_col = find_column(vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location')
             if sensor_col:
                 total_sensors = vacuum_df[sensor_col].nunique()
-                st.metric("Total Sensors", total_sensors)
+                
+                # Add site breakdown if available
+                if has_vacuum_site:
+                    ny_count = vacuum_df[vacuum_df['Site'] == 'NY'][sensor_col].nunique()
+                    vt_count = vacuum_df[vacuum_df['Site'] == 'VT'][sensor_col].nunique()
+                    st.metric("Total Sensors", total_sensors)
+                    st.caption(f"🟦 NY: {ny_count} | 🟩 VT: {vt_count}")
+                else:
+                    st.metric("Total Sensors", total_sensors)
             else:
                 st.metric("Total Sensors", "N/A")
         else:
@@ -228,7 +284,16 @@ def render(vacuum_df, personnel_df):
             if vacuum_col:
                 avg_vac = pd.to_numeric(vacuum_df[vacuum_col], errors='coerce').mean()
                 status = config.get_vacuum_emoji(avg_vac)
-                st.metric("Avg Vacuum", f"{avg_vac:.1f}\"", delta=status)
+                
+                # Show site breakdown if available
+                if has_vacuum_site:
+                    ny_avg = pd.to_numeric(vacuum_df[vacuum_df['Site'] == 'NY'][vacuum_col], errors='coerce').mean()
+                    vt_avg = pd.to_numeric(vacuum_df[vacuum_df['Site'] == 'VT'][vacuum_col], errors='coerce').mean()
+                    st.metric("Avg Vacuum", f"{avg_vac:.1f}\"", delta=status)
+                    if not pd.isna(ny_avg) and not pd.isna(vt_avg):
+                        st.caption(f"🟦 NY: {ny_avg:.1f}\" | 🟩 VT: {vt_avg:.1f}\"")
+                else:
+                    st.metric("Avg Vacuum", f"{avg_vac:.1f}\"", delta=status)
             else:
                 st.metric("Avg Vacuum", "N/A")
         else:
@@ -239,6 +304,15 @@ def render(vacuum_df, personnel_df):
         problem_count = len(critical)
         st.metric("Problem Sensors", problem_count,
                   delta="🔴" if problem_count > 20 else ("🟡" if problem_count > 10 else "🟢"))
+        
+        # Show site breakdown of problems if available
+        if not critical.empty and 'Site' in critical.columns:
+            site_counts = critical['Site'].value_counts()
+            breakdown = " | ".join([f"🟦 {site_counts.get('NY', 0)}" if s == 'NY' 
+                                   else f"🟩 {site_counts.get('VT', 0)}" 
+                                   for s in ['NY', 'VT'] if s in site_counts.index])
+            if breakdown:
+                st.caption(breakdown)
 
     with col4:
         # Get weather
@@ -290,7 +364,7 @@ def render(vacuum_df, personnel_df):
 
     st.markdown("---")
 
-    # Critical alerts
+    # Critical alerts with site information
     st.subheader("🚨 Critical Alerts")
 
     critical = get_critical_sensors(vacuum_df)
@@ -298,27 +372,42 @@ def render(vacuum_df, personnel_df):
     if critical.empty:
         st.success("✅ No critical alerts - all systems healthy!")
     else:
-        if len(critical) <= 10:
+        # Group by site if available
+        if 'Site' in critical.columns:
             st.error(f"⚠️ {len(critical)} sensor(s) need immediate attention")
-
-            for idx, row in critical.head(10).iterrows():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"**{row['Sensor']}**")
-                with col2:
-                    st.markdown(f"🔴 {row['Vacuum']:.1f}\"")
+            
+            # Show breakdown by site
+            for site in ['NY', 'VT', 'UNK']:
+                site_problems = critical[critical['Site'] == site]
+                if not site_problems.empty:
+                    site_emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
+                    with st.expander(f"{site_emoji} **{site} Site** - {len(site_problems)} problem sensors", expanded=(site == 'NY')):
+                        for idx, row in site_problems.head(10).iterrows():
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.markdown(f"**{row['Sensor']}**")
+                            with col2:
+                                st.markdown(f"🔴 {row['Vacuum']:.1f}\"")
         else:
-            st.error(f"⚠️ **{len(critical)} sensors below threshold** - System-wide issue likely!")
-
-            st.markdown("**Worst 5 locations:**")
-            for idx, row in critical.head(5).iterrows():
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"• {row['Sensor']}")
-                with col2:
-                    st.markdown(f"🔴 {row['Vacuum']:.1f}\"")
-
-            st.info(f"💡 {len(critical) - 5} more sensors need attention - see Mainline Details page")
+            # No site info, show flat list
+            if len(critical) <= 10:
+                st.error(f"⚠️ {len(critical)} sensor(s) need immediate attention")
+                for idx, row in critical.head(10).iterrows():
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"**{row['Sensor']}**")
+                    with col2:
+                        st.markdown(f"🔴 {row['Vacuum']:.1f}\"")
+            else:
+                st.error(f"⚠️ **{len(critical)} sensors below threshold** - System-wide issue likely!")
+                st.markdown("**Worst 5 locations:**")
+                for idx, row in critical.head(5).iterrows():
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"• {row['Sensor']}")
+                    with col2:
+                        st.markdown(f"🔴 {row['Vacuum']:.1f}\"")
+                st.info(f"💡 {len(critical) - 5} more sensors need attention - see Vacuum Performance page")
 
     st.markdown("---")
 
@@ -383,29 +472,30 @@ def render(vacuum_df, personnel_df):
     with col1:
         st.markdown("""
         **Data & Analysis**
-        - 🏠 Overview - System status
-        - 📍 Mainline Details - All sensors
+        - 🔧 Vacuum Performance - System status
         - 🌍 Interactive Map - Visual layout
+        - 🗺️ Problem Clusters - Geographic issues
         """)
 
     with col2:
         st.markdown("""
         **Operations**
+        - 🌳 Tapping Operations - Productivity
         - 🔧 Maintenance Tracking - Log work
         - ⭐ Employee Effectiveness - Performance
-        - 🌡️ Sap Flow Forecast - 10-day outlook
         """)
 
     with col3:
         st.markdown("""
-        **Problems**
-        - 🗺️ Problem Clusters - Geographic issues
+        **Planning**
+        - 🌡️ Sap Flow Forecast - 10-day outlook
         - 📊 Raw Data - Detailed analysis
+        - 👥 Employee Performance - Rankings
         """)
 
     st.markdown("---")
 
-    # Yesterday's summary (if data available)
+    # Yesterday's summary with site breakdown
     if not personnel_df.empty:
         st.subheader("📊 Yesterday's Summary")
 
@@ -434,6 +524,17 @@ def render(vacuum_df, personnel_df):
                     if mainline_col:
                         locations = yesterday_data[mainline_col].nunique()
                         st.metric("Locations Worked", locations)
+                
+                # Show site breakdown if available
+                if has_personnel_site:
+                    st.markdown("**Work Distribution by Site:**")
+                    site_counts = yesterday_data['Site'].value_counts()
+                    
+                    cols = st.columns(len(site_counts))
+                    for idx, (site, count) in enumerate(site_counts.items()):
+                        with cols[idx]:
+                            emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
+                            st.metric(f"{emoji} {site}", f"{count} sessions")
             else:
                 st.info("No work recorded for yesterday")
 
@@ -451,6 +552,12 @@ def render(vacuum_df, personnel_df):
         4. **Follow the action plan** - tasks are prioritized for you
         5. **Update throughout the day** - refresh to see latest data
 
+        **Multi-Site Features:**
+        - Quick stats show breakdown by site (NY/VT)
+        - Critical alerts grouped by site for better dispatch
+        - Action plan includes site-specific recommendations
+        - Yesterday's summary shows work distribution
+
         **Time-Saving Tips:**
         - Bookmark this page as your dashboard homepage
         - Check on mobile before leaving for the sugar bush
@@ -463,7 +570,7 @@ def render(vacuum_df, personnel_df):
         - 🟢 **Priority 3 (Routine)**: Normal daily tasks
 
         The action plan is automatically generated based on:
-        - Current sensor status
+        - Current sensor status (across all sites)
         - Weather conditions
         - Historical patterns
         - Best practices for maple operations
