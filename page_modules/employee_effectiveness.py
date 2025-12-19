@@ -1,6 +1,7 @@
 """
-Employee Effectiveness Page Module
+Employee Effectiveness Page Module - MULTI-SITE ENHANCED
 Analyzes vacuum improvements based on employee maintenance work
+Now includes site tracking and cross-site comparison
 """
 
 import streamlit as st
@@ -9,7 +10,7 @@ from metrics import calculate_employee_effectiveness
 
 
 def render(personnel_df, vacuum_df):
-    """Render employee effectiveness page showing vacuum improvements"""
+    """Render employee effectiveness page showing vacuum improvements with site awareness"""
 
     st.title("⭐ Employee Effectiveness")
     st.markdown("*Track vacuum improvements based on who worked where*")
@@ -17,6 +18,10 @@ def render(personnel_df, vacuum_df):
     if personnel_df.empty or vacuum_df.empty:
         st.warning("Need both personnel and vacuum data for effectiveness analysis")
         return
+
+    # Check if we have site information
+    has_personnel_site = 'Site' in personnel_df.columns
+    has_vacuum_site = 'Site' in vacuum_df.columns
 
     # Calculate effectiveness
     with st.spinner("Analyzing employee effectiveness..."):
@@ -125,6 +130,25 @@ def render(personnel_df, vacuum_df):
         """)
         return
 
+    # Add site information to effectiveness data if available
+    if has_personnel_site:
+        # Merge site info from personnel data
+        if 'Date' in effectiveness_df.columns and 'Employee' in effectiveness_df.columns:
+            # Create merge key from effectiveness_df
+            eff_merge = effectiveness_df[['Date', 'Employee', 'Mainline']].copy()
+            
+            # Get site from personnel data
+            if 'Date' in personnel_df.columns and 'Employee Name' in personnel_df.columns:
+                personnel_site = personnel_df[['Date', 'Employee Name', 'Site']].copy()
+                personnel_site.columns = ['Date', 'Employee', 'Site']
+                
+                # Merge to get site info
+                effectiveness_df = effectiveness_df.merge(
+                    personnel_site.drop_duplicates(),
+                    on=['Date', 'Employee'],
+                    how='left'
+                )
+
     # Summary metrics
     st.subheader("📊 Overall Impact")
 
@@ -147,6 +171,29 @@ def render(personnel_df, vacuum_df):
         total_improvement = effectiveness_df['Improvement'].sum()
         st.metric("Total Improvement", f"{total_improvement:+.1f}\"")
 
+    # Site-specific metrics if available
+    if 'Site' in effectiveness_df.columns:
+        st.markdown("---")
+        st.subheader("🏢 Performance by Site")
+        
+        site_cols = st.columns(3)
+        
+        for idx, site in enumerate(['NY', 'VT', 'UNK']):
+            site_data = effectiveness_df[effectiveness_df['Site'] == site]
+            if not site_data.empty:
+                with site_cols[idx]:
+                    emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
+                    st.markdown(f"### {emoji} {site}")
+                    
+                    site_avg = site_data['Improvement'].mean()
+                    st.metric("Avg Improvement", f"{site_avg:+.1f}\"")
+                    
+                    site_sessions = len(site_data)
+                    st.metric("Sessions", site_sessions)
+                    
+                    site_success = len(site_data[site_data['Improvement'] > 0]) / len(site_data) * 100
+                    st.metric("Success Rate", f"{site_success:.0f}%")
+
     st.divider()
 
     # Employee Rankings
@@ -162,6 +209,16 @@ def render(personnel_df, vacuum_df):
     employee_stats.columns = ['Employee', 'Avg_Improvement', 'Total_Improvement',
                               'Sessions', 'Locations', 'Avg_Before', 'Avg_After']
 
+    # Add site information if available
+    if 'Site' in effectiveness_df.columns:
+        # Get sites each employee worked at
+        emp_sites = effectiveness_df.groupby('Employee')['Site'].apply(
+            lambda x: ', '.join(sorted(x.unique()))
+        ).reset_index()
+        emp_sites.columns = ['Employee', 'Sites_Worked']
+        
+        employee_stats = employee_stats.merge(emp_sites, on='Employee', how='left')
+
     # Sort by average improvement
     employee_stats = employee_stats.sort_values('Avg_Improvement', ascending=False)
 
@@ -175,7 +232,64 @@ def render(personnel_df, vacuum_df):
     # Add rank
     display.insert(0, 'Rank', range(1, len(display) + 1))
 
-    st.dataframe(display, use_container_width=True, hide_index=True, height=400)
+    # Select columns for display
+    if 'Sites_Worked' in display.columns:
+        display_cols = ['Rank', 'Employee', 'Sites_Worked', 'Avg_Improvement', 'Sessions', 'Total_Improvement']
+        col_names = ['#', 'Employee', 'Sites', 'Avg Δ', 'Sessions', 'Total Δ']
+    else:
+        display_cols = ['Rank', 'Employee', 'Avg_Improvement', 'Sessions', 'Total_Improvement']
+        col_names = ['#', 'Employee', 'Avg Δ', 'Sessions', 'Total Δ']
+
+    display_table = display[display_cols].copy()
+    display_table.columns = col_names
+
+    st.dataframe(display_table, use_container_width=True, hide_index=True, height=400)
+
+    st.divider()
+
+    # Site comparison chart if applicable
+    if 'Site' in effectiveness_df.columns and len(effectiveness_df['Site'].unique()) > 1:
+        st.subheader("📊 Cross-Site Effectiveness Comparison")
+        
+        import plotly.graph_objects as go
+        
+        # Calculate average improvement by site
+        site_avg = effectiveness_df.groupby('Site')['Improvement'].mean().reset_index()
+        site_avg = site_avg.sort_values('Improvement', ascending=False)
+        
+        # Color code by site
+        colors = []
+        for site in site_avg['Site']:
+            if site == 'NY':
+                colors.append('#2196F3')  # Blue
+            elif site == 'VT':
+                colors.append('#4CAF50')  # Green
+            else:
+                colors.append('#9E9E9E')  # Gray
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=site_avg['Site'],
+            y=site_avg['Improvement'],
+            marker_color=colors,
+            text=site_avg['Improvement'].apply(lambda x: f"{x:+.1f}\""),
+            textposition='outside'
+        ))
+        
+        fig.update_layout(
+            yaxis_title="Average Vacuum Improvement (inches)",
+            xaxis_title="Site",
+            height=300,
+            showlegend=False
+        )
+        
+        # Add zero line
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.caption("📈 Compare average vacuum improvement across sites to identify best practices")
 
     st.divider()
 
@@ -189,7 +303,7 @@ def render(personnel_df, vacuum_df):
         emp_sessions = emp_sessions.sort_values('Date', ascending=False)
 
         # Summary for this employee
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.metric("Total Sessions", len(emp_sessions))
@@ -203,6 +317,31 @@ def render(personnel_df, vacuum_df):
             pct = (positive / len(emp_sessions)) * 100
             st.metric("Positive Impact", f"{positive}/{len(emp_sessions)} ({pct:.0f}%)")
 
+        with col4:
+            if 'Site' in emp_sessions.columns:
+                sites_worked = ', '.join(sorted(emp_sessions['Site'].unique()))
+                st.metric("Sites Worked", sites_worked)
+
+        # Site breakdown if available
+        if 'Site' in emp_sessions.columns and len(emp_sessions['Site'].unique()) > 1:
+            st.markdown("**Performance by Site:**")
+            
+            site_perf = emp_sessions.groupby('Site').agg({
+                'Improvement': 'mean',
+                'Mainline': 'count'
+            }).reset_index()
+            site_perf.columns = ['Site', 'Avg_Improvement', 'Sessions']
+            
+            cols = st.columns(len(site_perf))
+            for idx, row in site_perf.iterrows():
+                with cols[idx]:
+                    emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
+                    st.metric(
+                        f"{emoji} {row['Site']}", 
+                        f"{row['Avg_Improvement']:+.1f}\"",
+                        delta=f"{row['Sessions']} sessions"
+                    )
+
         st.subheader("Work History")
 
         # Display sessions
@@ -215,12 +354,23 @@ def render(personnel_df, vacuum_df):
         )
 
         cols_to_show = ['Date', 'Mainline', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
+        col_labels = ['Date', 'Location', 'Before', 'After', 'Change']
+        
+        if 'Site' in display_sessions.columns:
+            # Add site emoji to location
+            display_sessions['Location_Display'] = display_sessions.apply(
+                lambda row: f"{'🟦' if row['Site'] == 'NY' else '🟩' if row['Site'] == 'VT' else '⚫'} {row['Mainline']}",
+                axis=1
+            )
+            cols_to_show = ['Date', 'Location_Display', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
+            col_labels = ['Date', 'Location', 'Before', 'After', 'Change']
+        
         if 'Hours' in display_sessions.columns:
             cols_to_show.append('Hours')
+            col_labels.append('Hours')
 
         display_sessions = display_sessions[cols_to_show]
-        display_sessions.columns = ['Date', 'Location', 'Before', 'After', 'Change'] + (
-            ['Hours'] if 'Hours' in display_sessions.columns else [])
+        display_sessions.columns = col_labels
 
         st.dataframe(display_sessions, use_container_width=True, hide_index=True)
 
@@ -232,3 +382,42 @@ def render(personnel_df, vacuum_df):
         chart_data = chart_data.set_index('Date')
 
         st.line_chart(chart_data, use_container_width=True)
+
+    st.divider()
+
+    # Tips with multi-site context
+    with st.expander("💡 Understanding Employee Effectiveness"):
+        st.markdown("""
+        **How This Works:**
+        
+        For each work session, we compare vacuum readings:
+        - **Before**: Average vacuum 48 hours before work
+        - **After**: Average vacuum 48 hours after work
+        - **Improvement**: After - Before (positive = good!)
+        
+        **Multi-Site Features:**
+        - Track which employees work at which sites
+        - Compare effectiveness across NY and VT
+        - Identify site-specific best practices
+        - Plan cross-site training opportunities
+        
+        **What Makes a Good Score:**
+        - **+5" or more**: Excellent work, major improvement
+        - **+2" to +5"**: Good work, solid improvement
+        - **0" to +2"**: Minor improvement or maintenance
+        - **Negative**: May indicate new problems or unrelated issues
+        
+        **Tips for Analysis:**
+        - Compare employees working the same site
+        - Look for patterns in high performers
+        - Use for training and recognition
+        - Consider site-specific challenges
+        - Some locations are naturally harder to maintain
+        
+        **Using This Data:**
+        - Recognize top performers publicly
+        - Provide targeted training for specific techniques
+        - Assign challenging locations to experienced crew
+        - Track improvement over time as crew gains experience
+        - Share best practices between sites
+        """)
