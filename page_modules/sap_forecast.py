@@ -1,6 +1,7 @@
 """
-Sap Flow Forecast Page Module
-Predicts sap flow likelihood for the next 10 days based on weather forecasts
+Sap Flow Forecast Page Module - MULTI-SITE POLISHED
+Predicts sap flow based on weather forecasts
+Now with multi-site context and notes
 """
 
 import streamlit as st
@@ -8,25 +9,12 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
-import plotly.express as px
 
 
-def get_weather_forecast(latitude, longitude, days=10):
-    """
-    Get weather forecast from Open-Meteo API (free, no API key needed)
-
-    Args:
-        latitude: Location latitude
-        longitude: Location longitude
-        days: Number of forecast days (max 16)
-
-    Returns:
-        DataFrame with daily forecasts
-    """
+def get_weather_forecast(latitude=43.4267, longitude=-73.7123, days=10):
+    """Get weather forecast from Open-Meteo API"""
     try:
-        # Open-Meteo API endpoint
         url = "https://api.open-meteo.com/v1/forecast"
-
         params = {
             "latitude": latitude,
             "longitude": longitude,
@@ -34,357 +22,421 @@ def get_weather_forecast(latitude, longitude, days=10):
                 "temperature_2m_max",
                 "temperature_2m_min",
                 "precipitation_sum",
-                "precipitation_probability_max"
+                "windspeed_10m_max"
             ],
             "temperature_unit": "fahrenheit",
+            "windspeed_unit": "mph",
+            "precipitation_unit": "inch",
             "timezone": "America/New_York",
             "forecast_days": days
         }
-
+        
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
-
+        
         data = response.json()
-
-        # Parse the daily data
-        daily = data['daily']
-
+        
+        # Convert to DataFrame
         df = pd.DataFrame({
-            'Date': pd.to_datetime(daily['time']),
-            'Max_Temp': daily['temperature_2m_max'],
-            'Min_Temp': daily['temperature_2m_min'],
-            'Precipitation': daily['precipitation_sum'],
-            'Precip_Probability': daily['precipitation_probability_max']
+            'date': pd.to_datetime(data['daily']['time']),
+            'high_temp': data['daily']['temperature_2m_max'],
+            'low_temp': data['daily']['temperature_2m_min'],
+            'precipitation': data['daily']['precipitation_sum'],
+            'wind_speed': data['daily']['windspeed_10m_max']
         })
-
+        
         return df
-
+        
     except Exception as e:
-        st.error(f"Error fetching weather forecast: {str(e)}")
+        st.error(f"Error fetching weather data: {str(e)}")
         return None
 
 
-def calculate_sap_flow_likelihood(weather_df):
+def calculate_sap_flow_likelihood(high, low, precip, wind):
     """
-    Calculate likelihood of sap flow based on temperature patterns
-
-    Ideal conditions:
-    - Night temps below 32°F (freezing)
-    - Day temps above 32°F (thawing)
-    - Temperature swing of 15-25°F
-    - Not too much precipitation
-
-    Returns:
-        DataFrame with sap flow predictions
+    Calculate likelihood of good sap flow based on weather conditions
+    
+    Returns score from 0-100 where:
+    - 0-30: Poor
+    - 30-50: Fair  
+    - 50-70: Good
+    - 70-100: Excellent
     """
-    df = weather_df.copy()
-
-    # Calculate temperature swing
-    df['Temp_Swing'] = df['Max_Temp'] - df['Min_Temp']
-
-    # Check ideal conditions
-    df['Freeze_at_Night'] = df['Min_Temp'] < 32.0
-    df['Thaw_During_Day'] = df['Max_Temp'] > 32.0
-    df['Good_Swing'] = df['Temp_Swing'].between(15, 25)
-    df['Low_Precip'] = df['Precipitation'] < 0.5
-
-    # Calculate likelihood score (0-100)
-    df['Likelihood'] = 0.0
-
-    # Base score from freeze/thaw cycle
-    df.loc[df['Freeze_at_Night'] & df['Thaw_During_Day'], 'Likelihood'] += 40
-
-    # Bonus for good temperature swing
-    df.loc[df['Good_Swing'], 'Likelihood'] += 30
-
-    # Additional points for optimal temps
-    # Ideal: Min around 25°F, Max around 45°F
-    df['Min_Temp_Score'] = 100 - abs(df['Min_Temp'] - 25) * 2
-    df['Min_Temp_Score'] = df['Min_Temp_Score'].clip(0, 20)
-
-    df['Max_Temp_Score'] = 100 - abs(df['Max_Temp'] - 45) * 2
-    df['Max_Temp_Score'] = df['Max_Temp_Score'].clip(0, 20)
-
-    df['Likelihood'] += (df['Min_Temp_Score'] + df['Max_Temp_Score']) / 2
-
-    # Penalty for precipitation
-    df.loc[~df['Low_Precip'], 'Likelihood'] -= 10
-
-    # Ensure likelihood is 0-100
-    df['Likelihood'] = df['Likelihood'].clip(0, 100)
-
-    # Categorize
-    def get_category(likelihood):
-        if likelihood >= 70:
-            return "Excellent"
-        elif likelihood >= 50:
-            return "Good"
-        elif likelihood >= 30:
-            return "Fair"
-        else:
-            return "Poor"
-
-    df['Category'] = df['Likelihood'].apply(get_category)
-
-    return df
+    likelihood = 0
+    
+    # Freeze/thaw cycle (most important factor)
+    if low < 32 and high > 32:
+        likelihood += 40
+    elif low < 28:
+        likelihood += 10  # Frozen all day - some flow
+    
+    # Temperature swing
+    swing = high - low
+    if 15 <= swing <= 25:
+        likelihood += 30
+    elif 10 <= swing <= 30:
+        likelihood += 20
+    else:
+        likelihood += 10
+    
+    # Optimal temperatures
+    min_score = max(0, 20 - abs(low - 25) * 2)
+    max_score = max(0, 20 - abs(high - 45) * 2)
+    likelihood += (min_score + max_score) / 2
+    
+    # Precipitation penalty (heavy rain dilutes sap)
+    if precip > 0.5:
+        likelihood -= 10
+    elif precip > 0.25:
+        likelihood -= 5
+    
+    # Wind penalty (drying)
+    if wind > 20:
+        likelihood -= 5
+    
+    return max(0, min(100, likelihood))
 
 
 def render(vacuum_df, personnel_df):
-    """Render sap flow forecast page"""
-
+    """Render sap flow forecast page with multi-site awareness"""
+    
     st.title("🌡️ Sap Flow Forecast")
-    st.markdown("*10-day forecast based on temperature patterns*")
-
-    # Location input
-    st.subheader("📍 Location Settings")
-
+    st.markdown("*10-day weather forecast and sap flow predictions*")
+    
+    # Check site context
+    has_site = 'Site' in vacuum_df.columns if not vacuum_df.empty else False
+    viewing_site = None
+    
+    if has_site and not vacuum_df.empty and len(vacuum_df['Site'].unique()) == 1:
+        viewing_site = vacuum_df['Site'].iloc[0]
+        site_emoji = "🟦" if viewing_site == "NY" else "🟩" if viewing_site == "VT" else "⚫"
+    
+    # Location settings
+    st.subheader("📍 Forecast Location")
+    
     col1, col2 = st.columns(2)
-
+    
     with col1:
-        # Default to Ellenburg, NY area
-        latitude = st.number_input(
-            "Latitude",
-            value=44.8997,
-            min_value=40.0,
-            max_value=45.0,
-            step=0.0001,
-            format="%.4f",
-            help="Your operation's latitude"
-        )
-
+        if viewing_site:
+            st.info(f"{site_emoji} **Forecasting for {viewing_site} site**")
+        else:
+            st.info("📊 **Weather forecast applies to both NY and VT sites** (similar regional conditions)")
+    
     with col2:
-        longitude = st.number_input(
-            "Longitude",
-            value=-73.8331,
-            min_value=-80.0,
-            max_value=-72.0,
-            step=0.0001,
-            format="%.4f",
-            help="Your operation's longitude"
-        )
-
-    st.caption("💡 Using Ellenburg, NY as default location. Update coordinates for your specific location.")
-
+        # Option to use custom coordinates
+        use_custom = st.checkbox("Use custom coordinates", value=False)
+    
+    if use_custom:
+        col1, col2 = st.columns(2)
+        with col1:
+            latitude = st.number_input("Latitude", value=43.4267, format="%.4f")
+        with col2:
+            longitude = st.number_input("Longitude", value=-73.7123, format="%.4f")
+    else:
+        # Default coordinates (Lake George area - between NY and VT operations)
+        latitude = 43.4267
+        longitude = -73.7123
+        st.caption(f"Using default coordinates: {latitude:.4f}°N, {longitude:.4f}°W (Lake George area)")
+    
     st.divider()
-
-    # Fetch weather data
+    
+    # Get forecast
     with st.spinner("Fetching weather forecast..."):
-        weather_df = get_weather_forecast(latitude, longitude, days=10)
-
-    if weather_df is None or weather_df.empty:
-        st.error("Unable to load weather forecast. Please try again.")
+        forecast_df = get_weather_forecast(latitude, longitude, days=10)
+    
+    if forecast_df is None or forecast_df.empty:
+        st.error("Unable to fetch weather forecast. Please try again later.")
         return
-
+    
     # Calculate sap flow likelihood
-    forecast_df = calculate_sap_flow_likelihood(weather_df)
-
-    # Display forecast summary
-    st.subheader("📊 Forecast Summary")
-
+    forecast_df['sap_likelihood'] = forecast_df.apply(
+        lambda row: calculate_sap_flow_likelihood(
+            row['high_temp'], 
+            row['low_temp'], 
+            row['precipitation'], 
+            row['wind_speed']
+        ),
+        axis=1
+    )
+    
+    # Add freeze/thaw indicator
+    forecast_df['freeze_thaw'] = (forecast_df['low_temp'] < 32) & (forecast_df['high_temp'] > 32)
+    
+    # Calculate temperature swing
+    forecast_df['temp_swing'] = forecast_df['high_temp'] - forecast_df['low_temp']
+    
+    # ============================================================================
+    # SUMMARY METRICS
+    # ============================================================================
+    
+    st.subheader("📊 10-Day Outlook")
+    
     col1, col2, col3, col4 = st.columns(4)
-
+    
     with col1:
-        excellent_days = len(forecast_df[forecast_df['Category'] == 'Excellent'])
-        st.metric("Excellent Days", excellent_days,
-                  help="Days with 70%+ likelihood of good sap flow")
-
+        excellent_days = len(forecast_df[forecast_df['sap_likelihood'] >= 70])
+        st.metric("Excellent Days", excellent_days, delta="🟢" if excellent_days > 0 else None)
+    
     with col2:
-        good_days = len(forecast_df[forecast_df['Category'] == 'Good'])
-        st.metric("Good Days", good_days,
-                  help="Days with 50-70% likelihood")
-
+        good_days = len(forecast_df[(forecast_df['sap_likelihood'] >= 50) & (forecast_df['sap_likelihood'] < 70)])
+        st.metric("Good Days", good_days, delta="🟡" if good_days > 0 else None)
+    
     with col3:
-        avg_likelihood = forecast_df['Likelihood'].mean()
-        st.metric("Avg Likelihood", f"{avg_likelihood:.0f}%",
-                  help="Average across all forecast days")
-
+        freeze_thaw_days = forecast_df['freeze_thaw'].sum()
+        st.metric("Freeze/Thaw Days", freeze_thaw_days)
+    
     with col4:
-        best_day = forecast_df.loc[forecast_df['Likelihood'].idxmax(), 'Date']
-        st.metric("Best Day", best_day.strftime('%a, %b %d'),
-                  help="Day with highest sap flow likelihood")
-
+        avg_likelihood = forecast_df['sap_likelihood'].mean()
+        st.metric("Avg Likelihood", f"{avg_likelihood:.0f}%")
+    
+    # Multi-site note
+    if has_site and not viewing_site:
+        st.info("""
+        💡 **Multi-Site Note:** This weather forecast applies to both NY and VT sites as they experience 
+        similar regional weather patterns. Expected sap flow conditions should be comparable at both locations, 
+        though local microclimates may cause minor variations.
+        """)
+    
     st.divider()
-
-    # Likelihood chart
-    st.subheader("📈 10-Day Sap Flow Likelihood")
-
-    # Create color scale
+    
+    # ============================================================================
+    # SAP FLOW LIKELIHOOD CHART
+    # ============================================================================
+    
+    st.subheader("🌡️ Sap Flow Likelihood")
+    
+    fig = go.Figure()
+    
+    # Color code by likelihood
     colors = []
-    for likelihood in forecast_df['Likelihood']:
+    for likelihood in forecast_df['sap_likelihood']:
         if likelihood >= 70:
             colors.append('#28a745')  # Green
         elif likelihood >= 50:
-            colors.append('#5cb85c')  # Light green
-        elif likelihood >= 30:
             colors.append('#ffc107')  # Yellow
+        elif likelihood >= 30:
+            colors.append('#fd7e14')  # Orange
         else:
             colors.append('#dc3545')  # Red
-
-    fig = go.Figure()
-
+    
     fig.add_trace(go.Bar(
-        x=forecast_df['Date'],
-        y=forecast_df['Likelihood'],
+        x=forecast_df['date'],
+        y=forecast_df['sap_likelihood'],
         marker_color=colors,
-        text=forecast_df['Likelihood'].apply(lambda x: f"{x:.0f}%"),
+        text=forecast_df['sap_likelihood'].apply(lambda x: f"{x:.0f}%"),
         textposition='outside',
-        hovertemplate='<b>%{x|%A, %B %d}</b><br>Likelihood: %{y:.0f}%<extra></extra>'
+        hovertemplate='<b>%{x|%A, %b %d}</b><br>Likelihood: %{y:.0f}%<extra></extra>'
     ))
-
+    
+    # Add reference lines
+    fig.add_hline(y=70, line_dash="dash", line_color="green", 
+                  annotation_text="Excellent", annotation_position="right")
+    fig.add_hline(y=50, line_dash="dash", line_color="orange",
+                  annotation_text="Good", annotation_position="right")
+    fig.add_hline(y=30, line_dash="dash", line_color="red",
+                  annotation_text="Fair", annotation_position="right")
+    
     fig.update_layout(
         yaxis_title="Sap Flow Likelihood (%)",
-        yaxis_range=[0, 110],
         xaxis_title="Date",
+        yaxis=dict(range=[0, 110]),
         height=400,
         showlegend=False
     )
-
+    
     st.plotly_chart(fig, use_container_width=True)
-
+    
     st.divider()
-
-    # Temperature forecast
+    
+    # ============================================================================
+    # TEMPERATURE CHART
+    # ============================================================================
+    
     st.subheader("🌡️ Temperature Forecast")
-
-    fig2 = go.Figure()
-
-    # Add temperature range (fill between min and max)
-    fig2.add_trace(go.Scatter(
-        x=forecast_df['Date'],
-        y=forecast_df['Max_Temp'],
-        mode='lines',
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=forecast_df['date'],
+        y=forecast_df['high_temp'],
+        mode='lines+markers',
         name='High',
         line=dict(color='#dc3545', width=2),
-        hovertemplate='High: %{y:.0f}°F<extra></extra>'
+        marker=dict(size=8)
     ))
-
-    fig2.add_trace(go.Scatter(
-        x=forecast_df['Date'],
-        y=forecast_df['Min_Temp'],
-        mode='lines',
+    
+    fig.add_trace(go.Scatter(
+        x=forecast_df['date'],
+        y=forecast_df['low_temp'],
+        mode='lines+markers',
         name='Low',
         line=dict(color='#007bff', width=2),
-        fill='tonexty',
-        fillcolor='rgba(0,123,255,0.1)',
-        hovertemplate='Low: %{y:.0f}°F<extra></extra>'
+        marker=dict(size=8)
     ))
-
+    
     # Add freezing line
-    fig2.add_hline(
-        y=32,
-        line_dash="dash",
-        line_color="gray",
-        annotation_text="Freezing (32°F)",
-        annotation_position="right"
-    )
-
-    fig2.update_layout(
+    fig.add_hline(y=32, line_dash="dash", line_color="gray",
+                  annotation_text="Freezing (32°F)", annotation_position="left")
+    
+    fig.update_layout(
         yaxis_title="Temperature (°F)",
         xaxis_title="Date",
         height=350,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-
-    st.plotly_chart(fig2, use_container_width=True)
-
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
     st.divider()
-
-    # Detailed forecast table
-    st.subheader("📋 Detailed Forecast")
-
-    # Format the display
-    display_df = forecast_df.copy()
-    display_df['Date'] = display_df['Date'].dt.strftime('%a, %b %d')
-    display_df['High'] = display_df['Max_Temp'].apply(lambda x: f"{x:.0f}°F")
-    display_df['Low'] = display_df['Min_Temp'].apply(lambda x: f"{x:.0f}°F")
-    display_df['Swing'] = display_df['Temp_Swing'].apply(lambda x: f"{x:.0f}°F")
-    display_df['Likelihood %'] = display_df['Likelihood'].apply(lambda x: f"{x:.0f}%")
-    display_df['Precip'] = display_df['Precipitation'].apply(lambda x: f"{x:.2f}\"")
-
-    # Status emojis
-    def get_emoji(category):
-        if category == 'Excellent':
-            return '🟢 Excellent'
-        elif category == 'Good':
-            return '🟡 Good'
-        elif category == 'Fair':
-            return '🟠 Fair'
+    
+    # ============================================================================
+    # DETAILED FORECAST TABLE
+    # ============================================================================
+    
+    st.subheader("📅 Detailed 10-Day Forecast")
+    
+    display = forecast_df.copy()
+    
+    # Format date
+    display['Date'] = display['date'].dt.strftime('%a, %b %d')
+    
+    # Format temperatures
+    display['High'] = display['high_temp'].apply(lambda x: f"{x:.0f}°F")
+    display['Low'] = display['low_temp'].apply(lambda x: f"{x:.0f}°F")
+    display['Swing'] = display['temp_swing'].apply(lambda x: f"{x:.0f}°F")
+    
+    # Format precipitation
+    display['Precip'] = display['precipitation'].apply(lambda x: f"{x:.2f}\"" if x > 0 else "-")
+    
+    # Format wind
+    display['Wind'] = display['wind_speed'].apply(lambda x: f"{x:.0f} mph")
+    
+    # Freeze/thaw indicator
+    display['F/T'] = display['freeze_thaw'].apply(lambda x: "✓" if x else "-")
+    
+    # Sap flow status
+    def get_status(likelihood):
+        if likelihood >= 70:
+            return "🟢 Excellent"
+        elif likelihood >= 50:
+            return "🟡 Good"
+        elif likelihood >= 30:
+            return "🟠 Fair"
         else:
-            return '🔴 Poor'
-
-    display_df['Status'] = display_df['Category'].apply(get_emoji)
-
+            return "🔴 Poor"
+    
+    display['Status'] = display['sap_likelihood'].apply(get_status)
+    display['Likelihood'] = display['sap_likelihood'].apply(lambda x: f"{x:.0f}%")
+    
     # Select columns for display
-    display_cols = ['Date', 'Status', 'Likelihood %', 'High', 'Low', 'Swing', 'Precip']
-
-    st.dataframe(
-        display_df[display_cols],
-        use_container_width=True,
-        hide_index=True
-    )
-
+    display_cols = ['Date', 'High', 'Low', 'Swing', 'F/T', 'Precip', 'Wind', 'Likelihood', 'Status']
+    
+    display_table = display[display_cols].copy()
+    
+    st.dataframe(display_table, use_container_width=True, hide_index=True, height=400)
+    
     st.divider()
-
-    # Educational information
-    st.subheader("📚 Understanding Sap Flow")
-
-    with st.expander("🔍 What Makes Good Sap Flow?"):
-        st.markdown("""
-        **Ideal Conditions for Maple Sap Flow:**
-
-        1. **Freeze-Thaw Cycle** ⭐ Most Important
-           - Nighttime temperatures below 32°F (freezing)
-           - Daytime temperatures above 32°F (thawing)
-           - This creates pressure changes that drive sap flow
-
-        2. **Temperature Swing**
-           - Ideal: 15-25°F difference between day and night
-           - Larger swings generally produce better flow
-           - Best when low is ~25°F and high is ~40-45°F
-
-        3. **Weather Conditions**
-           - Clear to partly cloudy skies are best
-           - Light wind is okay
-           - Heavy rain or snow can reduce flow
-
-        4. **Time of Season**
-           - Early to mid-season typically best
-           - Late season: warmer days may cause budding
-
-        **This forecast considers:**
-        - ✓ Freeze/thaw cycles (40% of score)
-        - ✓ Temperature swing (30% of score)  
-        - ✓ Optimal temperature ranges (20% of score)
-        - ✓ Precipitation levels (10% of score)
+    
+    # ============================================================================
+    # RECOMMENDATIONS
+    # ============================================================================
+    
+    st.subheader("✅ Planning Recommendations")
+    
+    # Find best days
+    best_days = forecast_df.nlargest(3, 'sap_likelihood')
+    
+    if not best_days.empty:
+        st.success(f"🌟 **Best days coming up:**")
+        for idx, day in best_days.iterrows():
+            date_str = day['date'].strftime('%A, %B %d')
+            st.write(f"• **{date_str}**: {day['sap_likelihood']:.0f}% likelihood "
+                    f"(High: {day['high_temp']:.0f}°F, Low: {day['low_temp']:.0f}°F)")
+    
+    # Warnings
+    poor_days = forecast_df[forecast_df['sap_likelihood'] < 30]
+    if not poor_days.empty:
+        st.warning(f"⚠️ **Poor flow days:**")
+        for idx, day in poor_days.iterrows():
+            date_str = day['date'].strftime('%A, %B %d')
+            reasons = []
+            if day['high_temp'] < 32:
+                reasons.append("too cold")
+            if day['low_temp'] >= 32:
+                reasons.append("no freeze")
+            if day['precipitation'] > 0.5:
+                reasons.append("heavy rain")
+            reason_str = ", ".join(reasons) if reasons else "marginal conditions"
+            st.write(f"• **{date_str}**: {day['sap_likelihood']:.0f}% likelihood ({reason_str})")
+    
+    # Multi-site operational notes
+    if has_site and not viewing_site:
+        st.info("""
+        **Multi-Site Operations:**
+        - Schedule both NY and VT crews similarly based on forecast
+        - Expect comparable sap flow at both locations
+        - Monitor actual production to catch local variations
+        - Share daily observations between sites
         """)
-
-    with st.expander("💡 How to Use This Forecast"):
+    
+    st.divider()
+    
+    # Tips
+    with st.expander("💡 Understanding Sap Flow Predictions"):
         st.markdown("""
-        **Planning Your Operations:**
-
-        - **🟢 Excellent Days (70-100%)**: Prime sap flow expected
-          - Plan for maximum collection capacity
-          - Schedule extra staff if possible
-          - Check vacuum systems before these days
-
-        - **🟡 Good Days (50-70%)**: Decent flow likely
-          - Normal operations expected
-          - Monitor systems regularly
-
-        - **🟠 Fair Days (30-50%)**: Marginal conditions
-          - Some flow possible but not optimal
-          - Good time for maintenance work
-
-        - **🔴 Poor Days (0-30%)**: Minimal flow expected
-          - Focus on maintenance and prep work
-          - Check equipment and make repairs
-          - Plan for better days ahead
-
-        **Tips:**
-        - Check forecast daily for updates
-        - Local conditions may vary slightly
-        - Update location coordinates for accuracy
-        - Combine with your vacuum monitoring data
+        **How Sap Flow Works:**
+        
+        Sap flows when:
+        1. **Freeze/Thaw Cycle**: Nights below 32°F, days above 32°F
+        2. **Temperature Swing**: Difference of 15-25°F is optimal
+        3. **Moderate Temps**: Lows near 25°F, highs near 40-45°F
+        
+        **Likelihood Scale:**
+        
+        - **70-100%** (🟢): Excellent conditions - maximum collection expected
+        - **50-70%** (🟡): Good conditions - solid flow expected
+        - **30-50%** (🟠): Fair conditions - some flow possible
+        - **0-30%** (🔴): Poor conditions - minimal/no flow expected
+        
+        **What Hurts Sap Flow:**
+        
+        - Heavy precipitation (dilutes sap)
+        - High winds (drying effect)
+        - Temperatures too warm (>50°F highs)
+        - No freeze/thaw cycle (all above or below 32°F)
+        
+        **Multi-Site Considerations:**
+        
+        **Weather Similarity:**
+        - NY and VT sites experience similar regional weather
+        - Forecast applies to both locations
+        - Both sites should see comparable sap flow
+        
+        **Local Variations:**
+        - Microclimates may cause small differences
+        - Elevation differences affect temperature
+        - Tree exposure (sun/shade) varies
+        - Monitor actual production at each site
+        
+        **Using This Forecast:**
+        
+        - **Daily Planning**: Check tonight's low and tomorrow's high
+        - **Weekly Planning**: Schedule crew based on best days
+        - **Capacity Planning**: Ensure collection capacity for excellent days
+        - **Maintenance Scheduling**: Use poor days for repairs
+        - **Multi-Site Coordination**: Plan crew schedules at both sites together
+        
+        **Best Practices:**
+        
+        - Check forecast daily
+        - Prepare for excellent days (maximize collection)
+        - Use poor days for maintenance and repairs
+        - Track actual vs. predicted flow to improve planning
+        - Share observations between NY and VT teams
+        - Adjust based on local site differences over time
+        
+        **Data Source:**
+        
+        Weather data from Open-Meteo.com - updated daily
+        Coordinates can be customized for precise local forecasts
         """)
-
-    st.info("🌐 Weather data provided by Open-Meteo.com (free weather API)")
