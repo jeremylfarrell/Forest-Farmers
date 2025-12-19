@@ -1,6 +1,7 @@
 """
-Tapping Productivity Page Module
+Tapping Productivity Page Module - MULTI-SITE ENHANCED
 Track tapping operations, employee productivity, and seasonal progress
+Now includes site-specific metrics and cross-site comparisons
 """
 
 import streamlit as st
@@ -12,14 +13,17 @@ from utils import find_column
 
 
 def render(personnel_df, vacuum_df):
-    """Render tapping productivity page"""
+    """Render tapping productivity page with site awareness"""
 
     st.title("🌳 Tapping Operations")
-    st.markdown("*Track tapping productivity and seasonal progress*")
+    st.markdown("*Track tapping productivity and seasonal progress across sites*")
 
     if personnel_df.empty:
         st.warning("No personnel data available for tapping analysis")
         return
+
+    # Check if we have site information
+    has_site = 'Site' in personnel_df.columns
 
     # Find relevant columns
     date_col = find_column(personnel_df, 'Date', 'date', 'timestamp')
@@ -72,11 +76,12 @@ def render(personnel_df, vacuum_df):
     df['Labor_Cost'] = df['Hours'] * df['Rate']
 
     # ========================================================================
-    # OVERALL SUMMARY
+    # OVERALL SUMMARY WITH SITE BREAKDOWN
     # ========================================================================
 
     st.subheader("📊 Season Summary")
 
+    # Main metrics
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
@@ -99,6 +104,34 @@ def render(personnel_df, vacuum_df):
     with col5:
         total_repairs = df['Repairs'].sum()
         st.metric("Repairs Needed", f"{int(total_repairs):,}")
+
+    # Site breakdown if available
+    if has_site:
+        st.markdown("---")
+        st.subheader("🏢 Breakdown by Site")
+        
+        site_summary = df.groupby('Site').agg({
+            'Taps_In': 'sum',
+            'Taps_Out': 'sum',
+            'Net_Taps': 'sum',
+            'Labor_Cost': 'sum',
+            'Hours': 'sum'
+        }).reset_index()
+        
+        cols = st.columns(len(site_summary))
+        
+        for idx, row in site_summary.iterrows():
+            with cols[idx]:
+                emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
+                st.markdown(f"### {emoji} {row['Site']}")
+                
+                st.metric("Taps Installed", f"{int(row['Taps_In']):,}")
+                st.metric("Net Change", f"{int(row['Net_Taps']):,}")
+                
+                # Calculate cost per tap for this site
+                if row['Taps_In'] > 0:
+                    cost_per_tap = row['Labor_Cost'] / row['Taps_In']
+                    st.metric("Cost/Tap", f"${cost_per_tap:.2f}")
 
     # COMPANY-WIDE EFFICIENCY METRICS
     st.divider()
@@ -124,6 +157,55 @@ def render(personnel_df, vacuum_df):
 
     with col4:
         st.metric("Total Labor Cost", f"${total_labor_cost:,.2f}")
+
+    # Site comparison chart if applicable
+    if has_site and len(site_summary) > 1:
+        st.divider()
+        st.subheader("📊 Site Cost Comparison")
+        
+        # Prepare data for chart
+        chart_data = site_summary[site_summary['Taps_In'] > 0].copy()
+        chart_data['Cost_Per_Tap'] = chart_data['Labor_Cost'] / chart_data['Taps_In']
+        
+        # Color code
+        colors = []
+        for site in chart_data['Site']:
+            if site == 'NY':
+                colors.append('#2196F3')  # Blue
+            elif site == 'VT':
+                colors.append('#4CAF50')  # Green
+            else:
+                colors.append('#9E9E9E')  # Gray
+        
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=chart_data['Site'],
+            y=chart_data['Cost_Per_Tap'],
+            marker_color=colors,
+            text=chart_data['Cost_Per_Tap'].apply(lambda x: f"${x:.2f}"),
+            textposition='outside'
+        ))
+        
+        # Add company average line
+        fig.add_hline(
+            y=avg_cost_per_tap,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text=f"Company Avg: ${avg_cost_per_tap:.2f}",
+            annotation_position="right"
+        )
+        
+        fig.update_layout(
+            yaxis_title="Cost Per Tap ($)",
+            xaxis_title="Site",
+            height=300,
+            showlegend=False
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.caption("💡 Lower cost per tap indicates higher efficiency at that site")
 
     st.divider()
 
@@ -165,49 +247,67 @@ def render(personnel_df, vacuum_df):
 
     st.subheader("📈 Daily Tapping Activity")
 
-    # Aggregate by date
-    daily = filtered_df.groupby(filtered_df['Date'].dt.date).agg({
-        'Taps_In': 'sum',
-        'Taps_Out': 'sum',
-        'Net_Taps': 'sum',
-        'Taps_Capped': 'sum',
-        'Employee': 'nunique'
-    }).reset_index()
-
-    daily.columns = ['Date', 'Taps_In', 'Taps_Out', 'Net_Taps', 'Taps_Capped', 'Employees']
+    # Aggregate by date (and site if available)
+    if has_site:
+        daily = filtered_df.groupby([filtered_df['Date'].dt.date, 'Site']).agg({
+            'Taps_In': 'sum',
+            'Taps_Out': 'sum',
+            'Net_Taps': 'sum',
+            'Taps_Capped': 'sum',
+            'Employee': 'nunique'
+        }).reset_index()
+        daily.columns = ['Date', 'Site', 'Taps_In', 'Taps_Out', 'Net_Taps', 'Taps_Capped', 'Employees']
+    else:
+        daily = filtered_df.groupby(filtered_df['Date'].dt.date).agg({
+            'Taps_In': 'sum',
+            'Taps_Out': 'sum',
+            'Net_Taps': 'sum',
+            'Taps_Capped': 'sum',
+            'Employee': 'nunique'
+        }).reset_index()
+        daily.columns = ['Date', 'Taps_In', 'Taps_Out', 'Net_Taps', 'Taps_Capped', 'Employees']
+    
     daily['Date'] = pd.to_datetime(daily['Date'])
     daily = daily.sort_values('Date')
 
     if not daily.empty:
-        # Create stacked bar chart
+        # Create chart with site colors if applicable
         fig = go.Figure()
 
-        fig.add_trace(go.Bar(
-            x=daily['Date'],
-            y=daily['Taps_In'],
-            name='Installed',
-            marker_color='#28a745',
-            hovertemplate='Installed: %{y}<extra></extra>'
-        ))
+        if has_site:
+            # Stacked bars by site
+            for site in sorted(daily['Site'].unique()):
+                site_data = daily[daily['Site'] == site]
+                color = '#2196F3' if site == 'NY' else '#4CAF50' if site == 'VT' else '#9E9E9E'
+                
+                fig.add_trace(go.Bar(
+                    x=site_data['Date'],
+                    y=site_data['Taps_In'],
+                    name=f"{site} - Installed",
+                    marker_color=color,
+                    opacity=0.8,
+                    hovertemplate=f'{site} Installed: %{{y}}<extra></extra>'
+                ))
+        else:
+            # Simple grouped bars
+            fig.add_trace(go.Bar(
+                x=daily['Date'],
+                y=daily['Taps_In'],
+                name='Installed',
+                marker_color='#28a745',
+                hovertemplate='Installed: %{y}<extra></extra>'
+            ))
 
-        fig.add_trace(go.Bar(
-            x=daily['Date'],
-            y=daily['Taps_Out'],
-            name='Removed',
-            marker_color='#dc3545',
-            hovertemplate='Removed: %{y}<extra></extra>'
-        ))
-
-        fig.add_trace(go.Bar(
-            x=daily['Date'],
-            y=daily['Taps_Capped'],
-            name='Capped',
-            marker_color='#ffc107',
-            hovertemplate='Capped: %{y}<extra></extra>'
-        ))
+            fig.add_trace(go.Bar(
+                x=daily['Date'],
+                y=daily['Taps_Out'],
+                name='Removed',
+                marker_color='#dc3545',
+                hovertemplate='Removed: %{y}<extra></extra>'
+            ))
 
         fig.update_layout(
-            barmode='group',
+            barmode='stack' if has_site else 'group',
             xaxis_title="Date",
             yaxis_title="Number of Taps",
             height=400,
@@ -241,12 +341,19 @@ def render(personnel_df, vacuum_df):
     emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
     emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
 
-    # NEW METRICS
     emp_stats['Minutes_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
     emp_stats['Minutes_Per_Tap'] = emp_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
 
     emp_stats['Cost_Per_Tap'] = (emp_stats['Labor_Cost'] / emp_stats['Taps_In']).round(2)
     emp_stats['Cost_Per_Tap'] = emp_stats['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+
+    # Add site information
+    if has_site:
+        emp_sites = filtered_df.groupby('Employee')['Site'].apply(
+            lambda x: ', '.join(sorted(x.unique()))
+        ).reset_index()
+        emp_sites.columns = ['Employee', 'Sites_Worked']
+        emp_stats = emp_stats.merge(emp_sites, on='Employee', how='left')
 
     # Sort by taps installed
     emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
@@ -258,17 +365,23 @@ def render(personnel_df, vacuum_df):
     if not display.empty:
         display.insert(0, 'Rank', range(1, len(display) + 1))
 
-        # Add efficiency indicator based on cost per tap (lower is better)
+        # Add efficiency indicator
         median_cost = display['Cost_Per_Tap'].median()
         display['Efficiency'] = display['Cost_Per_Tap'].apply(
             lambda x: '🟢 Low Cost' if x < median_cost else ('🟡 Average' if x == median_cost else '🔴 High Cost')
         )
 
         # Format for display
-        display_cols = ['Rank', 'Employee', 'Taps_In', 'Hours', 'Taps_Per_Hour',
-                        'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost', 'Efficiency']
-        col_names = ['#', 'Employee', 'Taps', 'Hours', 'Taps/Hr',
-                     'Min/Tap', '$/Tap', 'Total $', '⚫']
+        if 'Sites_Worked' in display.columns:
+            display_cols = ['Rank', 'Employee', 'Sites_Worked', 'Taps_In', 'Hours', 'Taps_Per_Hour',
+                            'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost', 'Efficiency']
+            col_names = ['#', 'Employee', 'Sites', 'Taps', 'Hours', 'Taps/Hr',
+                         'Min/Tap', '$/Tap', 'Total $', '⚫']
+        else:
+            display_cols = ['Rank', 'Employee', 'Taps_In', 'Hours', 'Taps_Per_Hour',
+                            'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost', 'Efficiency']
+            col_names = ['#', 'Employee', 'Taps', 'Hours', 'Taps/Hr',
+                         'Min/Tap', '$/Tap', 'Total $', '⚫']
 
         display_table = display[display_cols].copy()
         display_table.columns = col_names
@@ -293,7 +406,6 @@ def render(personnel_df, vacuum_df):
             st.metric("Avg Cost/Tap", f"${avg_cost:.2f}")
 
         with col4:
-            # Find most efficient (lowest cost per tap)
             most_efficient = display.loc[display['Cost_Per_Tap'].idxmin(), 'Employee']
             st.metric("Most Efficient", most_efficient)
 
@@ -302,248 +414,7 @@ def render(personnel_df, vacuum_df):
 
     st.divider()
 
-    # ========================================================================
-    # COST COMPARISON CHART
-    # ========================================================================
-
-    if not display.empty and len(display) > 1:
-        st.subheader("💵 Cost Per Tap Comparison")
-
-        # Create bar chart comparing cost per tap
-        fig = go.Figure()
-
-        # Sort by cost per tap for better visualization
-        chart_data = display.sort_values('Cost_Per_Tap', ascending=True)
-
-        # Color bars based on efficiency
-        colors = ['#28a745' if cost < median_cost else '#ffc107' if cost == median_cost else '#dc3545'
-                  for cost in chart_data['Cost_Per_Tap']]
-
-        fig.add_trace(go.Bar(
-            x=chart_data['Employee'],
-            y=chart_data['Cost_Per_Tap'],
-            marker_color=colors,
-            text=chart_data['Cost_Per_Tap'].apply(lambda x: f"${x:.2f}"),
-            textposition='outside',
-            hovertemplate='%{x}<br>Cost/Tap: $%{y:.2f}<extra></extra>'
-        ))
-
-        # Add median line
-        fig.add_hline(
-            y=median_cost,
-            line_dash="dash",
-            line_color="gray",
-            annotation_text=f"Median: ${median_cost:.2f}",
-            annotation_position="right"
-        )
-
-        fig.update_layout(
-            xaxis_title="Employee",
-            yaxis_title="Cost Per Tap ($)",
-            height=400,
-            showlegend=False
-        )
-
-        st.plotly_chart(fig, use_container_width=True)
-
-        st.divider()
-
-    # ========================================================================
-    # LOCATION-BASED TAPPING
-    # ========================================================================
-
-    if mainline_col:
-        st.subheader("📍 Tapping by Location")
-
-        location_stats = filtered_df.groupby('Mainline').agg({
-            'Taps_In': 'sum',
-            'Taps_Out': 'sum',
-            'Net_Taps': 'sum',
-            'Taps_Capped': 'sum',
-            'Hours': 'sum',
-            'Labor_Cost': 'sum',
-            'Employee': 'nunique'
-        }).reset_index()
-
-        location_stats.columns = ['Location', 'Installed', 'Removed', 'Net_Change', 'Capped',
-                                  'Hours', 'Labor_Cost', 'Employees']
-
-        # Calculate efficiency metrics by location
-        location_stats['Cost_Per_Tap'] = (location_stats['Labor_Cost'] / location_stats['Installed']).round(2)
-        location_stats['Minutes_Per_Tap'] = ((location_stats['Hours'] * 60) / location_stats['Installed']).round(1)
-
-        location_stats = location_stats[location_stats['Installed'] > 0]
-        location_stats = location_stats.sort_values('Installed', ascending=False)
-
-        if not location_stats.empty:
-            # Top 20 locations
-            display_locs = location_stats.head(20).copy()
-
-            # Format for display
-            display_locs['Labor_Cost'] = display_locs['Labor_Cost'].apply(lambda x: f"${x:,.2f}")
-            display_locs['Cost_Per_Tap'] = display_locs['Cost_Per_Tap'].apply(lambda x: f"${x:.2f}")
-
-            st.dataframe(display_locs, use_container_width=True, hide_index=True)
-
-            st.caption(f"Showing top 20 of {len(location_stats)} locations with tapping activity")
-        else:
-            st.info("No location data available")
-
-    st.divider()
-
-    # ========================================================================
-    # INDIVIDUAL EMPLOYEE DETAIL
-    # ========================================================================
-
-    st.subheader("📋 Individual Employee Details")
-
-    employees = sorted(filtered_df[filtered_df['Taps_In'] > 0]['Employee'].unique())
-
-    if employees:
-        selected_emp = st.selectbox("Select Employee", employees)
-
-        emp_data = filtered_df[filtered_df['Employee'] == selected_emp].copy()
-        emp_data = emp_data.sort_values('Date', ascending=False)
-
-        # Summary for this employee
-        total_taps = emp_data['Taps_In'].sum()
-        total_hours = emp_data['Hours'].sum()
-        total_cost = emp_data['Labor_Cost'].sum()
-
-        col1, col2, col3, col4, col5 = st.columns(5)
-
-        with col1:
-            st.metric("Total Taps", f"{int(total_taps):,}")
-
-        with col2:
-            rate = total_taps / total_hours if total_hours > 0 else 0
-            st.metric("Taps/Hour", f"{rate:.1f}")
-
-        with col3:
-            mins_per_tap = (total_hours * 60) / total_taps if total_taps > 0 else 0
-            st.metric("Minutes/Tap", f"{mins_per_tap:.1f}")
-
-        with col4:
-            cost_per_tap = total_cost / total_taps if total_taps > 0 else 0
-            st.metric("Cost/Tap", f"${cost_per_tap:.2f}")
-
-        with col5:
-            st.metric("Total Cost", f"${total_cost:,.2f}")
-
-        st.subheader("Work History")
-
-        # Display detailed sessions
-        display_sessions = emp_data.copy()
-        display_sessions['Date'] = display_sessions['Date'].dt.strftime('%Y-%m-%d')
-
-        # Calculate per-session metrics
-        display_sessions['Session_Cost'] = display_sessions['Labor_Cost']
-        display_sessions['Cost_Per_Tap_Session'] = (display_sessions['Labor_Cost'] / display_sessions['Taps_In']).round(
-            2)
-        display_sessions['Minutes_Per_Tap_Session'] = (
-                    (display_sessions['Hours'] * 60) / display_sessions['Taps_In']).round(1)
-
-        cols_to_show = ['Date', 'Taps_In', 'Hours', 'Minutes_Per_Tap_Session',
-                        'Cost_Per_Tap_Session', 'Session_Cost']
-        if mainline_col:
-            cols_to_show.insert(1, 'Mainline')
-
-        display_sessions = display_sessions[cols_to_show]
-
-        col_names = ['Date'] + (['Location'] if mainline_col else []) + \
-                    ['Taps', 'Hours', 'Min/Tap', '$/Tap', 'Total $']
-        display_sessions.columns = col_names
-
-        # Format currency
-        display_sessions['$/Tap'] = display_sessions['$/Tap'].apply(lambda x: f"${x:.2f}" if x > 0 else "$0.00")
-        display_sessions['Total $'] = display_sessions['Total $'].apply(lambda x: f"${x:,.2f}")
-
-        st.dataframe(display_sessions, use_container_width=True, hide_index=True)
-
-        # Productivity trend chart
-        st.subheader("Productivity Trend")
-
-        daily_emp = emp_data.groupby(emp_data['Date'].dt.date).agg({
-            'Taps_In': 'sum',
-            'Hours': 'sum',
-            'Labor_Cost': 'sum'
-        }).reset_index()
-
-        daily_emp['Rate'] = daily_emp['Taps_In'] / daily_emp['Hours']
-        daily_emp['Rate'] = daily_emp['Rate'].replace([float('inf'), float('-inf')], 0)
-        daily_emp['Cost_Per_Tap'] = daily_emp['Labor_Cost'] / daily_emp['Taps_In']
-        daily_emp['Cost_Per_Tap'] = daily_emp['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-        daily_emp['Date'] = pd.to_datetime(daily_emp['Date'])
-        daily_emp = daily_emp.sort_values('Date')
-
-        if len(daily_emp) > 1:
-            # Two charts: efficiency and cost
-            col1, col2 = st.columns(2)
-
-            with col1:
-                fig1 = go.Figure()
-                fig1.add_trace(go.Scatter(
-                    x=daily_emp['Date'],
-                    y=daily_emp['Rate'],
-                    mode='lines+markers',
-                    name='Taps/Hour',
-                    line=dict(color='#007bff', width=2),
-                    marker=dict(size=8)
-                ))
-
-                avg_rate = daily_emp['Rate'].mean()
-                fig1.add_hline(
-                    y=avg_rate,
-                    line_dash="dash",
-                    line_color="gray",
-                    annotation_text=f"Avg: {avg_rate:.1f}",
-                    annotation_position="right"
-                )
-
-                fig1.update_layout(
-                    title="Efficiency Over Time",
-                    xaxis_title="Date",
-                    yaxis_title="Taps Per Hour",
-                    height=300
-                )
-                st.plotly_chart(fig1, use_container_width=True)
-
-            with col2:
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(
-                    x=daily_emp['Date'],
-                    y=daily_emp['Cost_Per_Tap'],
-                    mode='lines+markers',
-                    name='Cost/Tap',
-                    line=dict(color='#28a745', width=2),
-                    marker=dict(size=8)
-                ))
-
-                avg_cost = daily_emp['Cost_Per_Tap'].mean()
-                fig2.add_hline(
-                    y=avg_cost,
-                    line_dash="dash",
-                    line_color="gray",
-                    annotation_text=f"Avg: ${avg_cost:.2f}",
-                    annotation_position="right"
-                )
-
-                fig2.update_layout(
-                    title="Cost Over Time",
-                    xaxis_title="Date",
-                    yaxis_title="Cost Per Tap ($)",
-                    height=300
-                )
-                st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("No employees with tapping activity in selected time range")
-
-    st.divider()
-
-    # ========================================================================
-    # TIPS & INSIGHTS
-    # ========================================================================
-
+    # Tips with multi-site context
     with st.expander("💡 Understanding Tapping Metrics"):
         st.markdown("""
         **Key Metrics Explained:**
@@ -556,6 +427,12 @@ def render(personnel_df, vacuum_df):
         - **Minutes Per Tap**: Time efficiency (lower = faster work)
         - **Cost Per Tap**: Labor cost efficiency (lower = more cost-effective)
 
+        **Multi-Site Features:**
+        - Compare efficiency between NY and VT operations
+        - Identify site-specific challenges affecting productivity
+        - Track which employees work at which sites
+        - Share best practices across locations
+
         **Good Productivity Rates:**
         - Beginner: 15-25 taps/hour (2.4-4 minutes/tap)
         - Experienced: 30-50 taps/hour (1.2-2 minutes/tap)
@@ -565,11 +442,12 @@ def render(personnel_df, vacuum_df):
         - Lower cost per tap = better efficiency
         - Compare employees to find training opportunities
         - Track cost trends to optimize crew assignments
-        - Use location data to identify challenging areas
+        - Consider terrain and site conditions when comparing
 
         **Tips for Analysis:**
         - Track improvement over season as crew gains experience
         - Compare rates between employees for training opportunities
         - Monitor cost per tap to control labor expenses
-        - Use location data to plan future tapping zones and identify difficult areas
+        - Use site breakdown to identify location-specific challenges
+        - Share successful techniques between sites
         """)
