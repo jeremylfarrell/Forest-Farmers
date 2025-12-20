@@ -26,7 +26,7 @@ from utils import filter_recent_sensors, find_column
 from styling import apply_custom_css
 
 # Import page modules
-from page_modules import vacuum, employees, employee_effectiveness, problem_clusters, raw_data, sensor_map, sap_forecast, maintenance, daily_summary, tapping
+from page_modules import vacuum, employees, employee_effectiveness, problem_clusters, raw_data, sensor_map, sap_forecast, maintenance, daily_summary, tapping, data_quality
 
 #password
 def check_password():
@@ -157,6 +157,7 @@ def render_sidebar():
                 "👥 Employee Performance",
                 "⭐ Employee Effectiveness",
                 "🔧 Maintenance & Leaks",
+                "⚠️ Data Validation",
                 "🗺️ Problem Clusters",
                 "🌍 Interactive Map",
                 "🌡️ Sap Flow Forecast",
@@ -400,6 +401,8 @@ def main():
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
+    elif page == "⚠️ Data Validation":
+        data_quality.render(personnel_df, vacuum_df)
     elif page == "🗺️ Problem Clusters":
         problem_clusters.render(vacuum_df)
     elif page == "🌍 Interactive Map":
