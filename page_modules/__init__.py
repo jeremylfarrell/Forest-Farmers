@@ -16,9 +16,9 @@ __all__ = [
     'problem_clusters',
     'raw_data',
     'sensor_map',
+    'data_quality",
     'sap_forecast',
     'maintenance',
     'daily_summary',
-    'data_quality",
     'tapping'
 ]
