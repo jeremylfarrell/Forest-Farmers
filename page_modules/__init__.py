@@ -18,6 +18,7 @@ __all__ = [
     'sensor_map',
     'sap_forecast',
     'maintenance',
-    'daily_summary'
+    'daily_summary',
+    'data_quality",
     'tapping'
 ]
