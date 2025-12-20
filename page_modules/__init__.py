@@ -16,7 +16,7 @@ __all__ = [
     'problem_clusters',
     'raw_data',
     'sensor_map',
-    'data_quality",
+    'data_quality',
     'sap_forecast',
     'maintenance',
     'daily_summary',
