@@ -32,15 +32,20 @@ def detect_location_mismatches(personnel_df, vacuum_df):
     emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
     date_col = find_column(personnel_df, 'Date', 'date')
     site_col = find_column(personnel_df, 'Site', 'site', 'location')
+    job_desc_col = find_column(personnel_df, 'Job Description', 'job', 'description', 'job_description')
     sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
     
     if not all([emp_col, date_col, site_col, sensor_col]):
         return pd.DataFrame(alerts)
     
-    # Get maintenance-related personnel records
-    maintenance_df = personnel_df[
-        personnel_df['Job Description'].str.contains('maint|repair|fix|leak', case=False, na=False)
-    ].copy()
+    # Get maintenance-related personnel records (only if we have job description column)
+    if job_desc_col:
+        maintenance_df = personnel_df[
+            personnel_df[job_desc_col].str.contains('maint|repair|fix|leak', case=False, na=False)
+        ].copy()
+    else:
+        # If no job description column, use all personnel records
+        maintenance_df = personnel_df.copy()
     
     for _, record in maintenance_df.iterrows():
         employee = record[emp_col]
@@ -153,14 +158,19 @@ def detect_zero_impact_maintenance(personnel_df, vacuum_df):
     emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
     date_col = find_column(personnel_df, 'Date', 'date')
     hours_col = find_column(personnel_df, 'Hours', 'hours', 'duration')
+    job_desc_col = find_column(personnel_df, 'Job Description', 'job', 'description', 'job_description')
     
     if not all([emp_col, date_col, hours_col]):
         return pd.DataFrame(alerts)
     
-    # Get maintenance-related personnel records
-    maintenance_df = personnel_df[
-        personnel_df['Job Description'].str.contains('maint|repair|fix|leak', case=False, na=False)
-    ].copy()
+    # Get maintenance-related personnel records (only if we have job description column)
+    if job_desc_col:
+        maintenance_df = personnel_df[
+            personnel_df[job_desc_col].str.contains('maint|repair|fix|leak', case=False, na=False)
+        ].copy()
+    else:
+        # If no job description column, use all personnel records
+        maintenance_df = personnel_df.copy()
     
     for _, record in maintenance_df.iterrows():
         employee = record[emp_col]
