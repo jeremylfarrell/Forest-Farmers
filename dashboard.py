@@ -25,9 +25,19 @@ from utils import filter_recent_sensors, find_column
 # Import custom styling
 from styling import apply_custom_css
 
-# Import page modules
-from page_modules import vacuum, employees, employee_effectiveness, problem_clusters, raw_data, sensor_map, sap_forecast, maintenance, daily_summary, tapping, data_quality
-
+from page_modules import (
+    vacuum, 
+    employees, 
+    employee_effectiveness, 
+    problem_clusters, 
+    raw_data, 
+    sensor_map, 
+    sap_forecast, 
+    maintenance, 
+    daily_summary, 
+    tapping, 
+    data_quality
+)
 #password
 def check_password():
     """Returns `True` if the user had the correct password."""
