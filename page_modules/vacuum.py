@@ -1,13 +1,46 @@
 """
 Vacuum Performance Page Module - MULTI-SITE POLISHED
 Shows performance metrics for each vacuum sensor and system trends
-Now with subtle site awareness
+UPDATED: Maple-only filtering, daily trends with hourly drill-down, temp-aware weekly view
 """
 
 import streamlit as st
 import pandas as pd
+import requests
 import config
 from utils import find_column, get_vacuum_column
+
+
+def get_temperature_data(days=7):
+    """Get historical temperature data from Open-Meteo API"""
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": 43.4267,  # Lake George, NY
+            "longitude": -73.7123,
+            "daily": ["temperature_2m_max", "temperature_2m_min"],
+            "temperature_unit": "fahrenheit",
+            "timezone": "America/New_York",
+            "past_days": days,
+            "forecast_days": 0
+        }
+        response = requests.get(url, params=params, timeout=5)
+        response.raise_for_status()
+        data = response.json()['daily']
+        
+        # Create dataframe
+        temp_df = pd.DataFrame({
+            'Date': pd.to_datetime(data['time']),
+            'High': data['temperature_2m_max'],
+            'Low': data['temperature_2m_min']
+        })
+        
+        # Check if any temp was above freezing
+        temp_df['Above_Freezing'] = (temp_df['High'] > 32) | (temp_df['Low'] > 32)
+        
+        return temp_df
+    except:
+        return None
 
 
 def render(vacuum_df, personnel_df):
@@ -19,6 +52,31 @@ def render(vacuum_df, personnel_df):
         st.warning("No vacuum data available")
         return
 
+    # ============================================================================
+    # MAPLE-ONLY FILTERING
+    # ============================================================================
+    
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location')
+    
+    if sensor_col:
+        original_count = len(vacuum_df)
+        
+        # Filter to only sensors that start with "maple" (case-insensitive)
+        vacuum_df = vacuum_df[
+            vacuum_df[sensor_col].str.lower().str.startswith('maple', na=False)
+        ].copy()
+        
+        filtered_count = len(vacuum_df)
+        
+        if filtered_count < original_count:
+            st.info(f"🍁 **Showing maple systems only** - {filtered_count:,} readings from maple sensors (filtered out {original_count - filtered_count:,} non-maple readings)")
+        else:
+            st.info(f"🍁 **Maple systems** - {filtered_count:,} sensor readings")
+    
+    if vacuum_df.empty:
+        st.warning("No maple sensor data available after filtering")
+        return
+
     # Check if we have site information and if we're viewing a specific site
     has_site = 'Site' in vacuum_df.columns
     viewing_site = None
@@ -26,20 +84,20 @@ def render(vacuum_df, personnel_df):
     if has_site and len(vacuum_df['Site'].unique()) == 1:
         viewing_site = vacuum_df['Site'].iloc[0]
         site_emoji = "🟦" if viewing_site == "NY" else "🟩" if viewing_site == "VT" else "⚫"
-        st.info(f"{site_emoji} **Viewing {viewing_site} site only** - {len(vacuum_df):,} sensor readings")
+        st.caption(f"{site_emoji} {viewing_site} site only")
     elif has_site:
         # Viewing multiple sites
         site_counts = vacuum_df['Site'].value_counts()
         site_info = " | ".join([f"🟦 NY: {site_counts.get('NY', 0):,}" if s == 'NY' 
                                else f"🟩 VT: {site_counts.get('VT', 0):,}" 
                                for s in ['NY', 'VT'] if s in site_counts.index])
-        st.info(f"📊 **Viewing all sites** - {site_info} readings")
+        st.caption(f"📊 All sites - {site_info}")
 
     # ============================================================================
-    # VACUUM TRENDS SECTION
+    # VACUUM TRENDS SECTION - DAILY VIEW WITH TEMPERATURE AWARENESS
     # ============================================================================
 
-    st.subheader("📈 Vacuum Trends (Last 7 Days)")
+    st.subheader("📈 Vacuum Trends - Daily View")
 
     vacuum_col = get_vacuum_column(vacuum_df)
     timestamp_col = find_column(
@@ -55,82 +113,98 @@ def render(vacuum_df, personnel_df):
         temp_df = temp_df.dropna(subset=[timestamp_col])
 
         if not temp_df.empty:
+            # Get temperature data
+            temp_data = get_temperature_data(days=7)
+            
             # Create date column
             temp_df['Date'] = temp_df[timestamp_col].dt.date
 
-            # Aggregate by date (and site if viewing all)
-            if has_site and not viewing_site:
-                # Multi-site view - show trends by site
+            # Aggregate by date
+            daily = temp_df.groupby('Date')[vacuum_col].mean().reset_index()
+            daily = daily.sort_values('Date').tail(7)
+            
+            if temp_data is not None:
+                # Merge with temperature data
+                temp_data['Date'] = temp_data['Date'].dt.date
+                daily = daily.merge(temp_data[['Date', 'High', 'Above_Freezing']], on='Date', how='left')
+                
+                # Filter to only days above freezing for weekly view
+                daily_above_freezing = daily[daily['Above_Freezing'] == True].copy()
+                
+                if len(daily_above_freezing) > 0:
+                    st.caption("📊 Showing only days with temps above freezing (optimal sap flow)")
+                    display_daily = daily_above_freezing
+                else:
+                    st.caption("❄️ No days above freezing in past week - showing all days")
+                    display_daily = daily
+            else:
+                display_daily = daily
+                st.caption("📊 7-day vacuum trend (temperature data unavailable)")
+
+            if len(display_daily) > 0:
+                # Convert date to datetime for proper chart display
+                display_daily['Date'] = pd.to_datetime(display_daily['Date'])
+
+                # Create nice chart with plotly for better control
                 import plotly.graph_objects as go
                 
                 fig = go.Figure()
                 
-                for site in sorted(temp_df['Site'].unique()):
-                    site_data = temp_df[temp_df['Site'] == site]
-                    daily = site_data.groupby('Date')[vacuum_col].mean().reset_index()
-                    daily = daily.sort_values('Date').tail(7)
-                    
-                    if len(daily) > 0:
-                        daily['Date'] = pd.to_datetime(daily['Date'])
-                        
-                        color = '#2196F3' if site == 'NY' else '#4CAF50' if site == 'VT' else '#9E9E9E'
-                        
-                        fig.add_trace(go.Scatter(
-                            x=daily['Date'],
-                            y=daily[vacuum_col],
-                            mode='lines+markers',
-                            name=f"{site}",
-                            line=dict(color=color, width=2),
-                            marker=dict(size=8)
-                        ))
+                # Add vacuum trace
+                fig.add_trace(go.Scatter(
+                    x=display_daily['Date'],
+                    y=display_daily[vacuum_col],
+                    mode='lines+markers',
+                    name='Avg Vacuum',
+                    line=dict(color='#2196F3', width=3),
+                    marker=dict(size=10),
+                    hovertemplate='<b>%{x|%B %d}</b><br>Vacuum: %{y:.1f}"<extra></extra>'
+                ))
                 
+                # Add temperature info if available
+                if 'High' in display_daily.columns:
+                    fig.add_trace(go.Scatter(
+                        x=display_daily['Date'],
+                        y=display_daily['High'],
+                        mode='lines',
+                        name='High Temp',
+                        line=dict(color='#FF9800', width=2, dash='dot'),
+                        yaxis='y2',
+                        hovertemplate='<b>%{x|%B %d}</b><br>High: %{y:.0f}°F<extra></extra>'
+                    ))
+                
+                # Update layout
                 fig.update_layout(
-                    yaxis_title="Average Vacuum (inches)",
+                    yaxis=dict(
+                        title="Average Vacuum (inches)",
+                        side='left'
+                    ),
+                    yaxis2=dict(
+                        title="Temperature (°F)",
+                        overlaying='y',
+                        side='right',
+                        showgrid=False
+                    ) if 'High' in display_daily.columns else None,
                     xaxis_title="Date",
-                    height=350,
+                    height=400,
+                    hovermode='x unified',
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
                 
                 st.plotly_chart(fig, use_container_width=True)
-                
-                # Show data summary for each site
-                col1, col2, col3 = st.columns(3)
-                for idx, site in enumerate(sorted(temp_df['Site'].unique())):
-                    site_data = temp_df[temp_df['Site'] == site]
-                    daily_site = site_data.groupby('Date')[vacuum_col].mean().reset_index()
-                    daily_site = daily_site.sort_values('Date').tail(7)
-                    
-                    with [col1, col2, col3][idx % 3]:
-                        emoji = "🟦" if site == "NY" else "🟩" if site == "VT" else "⚫"
-                        st.markdown(f"**{emoji} {site} Site:**")
-                        if len(daily_site) > 0:
-                            st.metric("7-Day Avg", f"{daily_site[vacuum_col].mean():.1f}\"")
-                            st.metric("Highest", f"{daily_site[vacuum_col].max():.1f}\"")
-                            st.metric("Lowest", f"{daily_site[vacuum_col].min():.1f}\"")
+
+                # Show data summary
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Days Shown", len(display_daily))
+                with col2:
+                    st.metric("Average", f"{display_daily[vacuum_col].mean():.1f}\"")
+                with col3:
+                    st.metric("Highest", f"{display_daily[vacuum_col].max():.1f}\"")
+                with col4:
+                    st.metric("Lowest", f"{display_daily[vacuum_col].min():.1f}\"")
             else:
-                # Single site or no site info - simple chart
-                daily = temp_df.groupby('Date')[vacuum_col].mean().reset_index()
-                daily = daily.sort_values('Date').tail(7)
-
-                if len(daily) > 0:
-                    # Convert date to datetime for proper chart display
-                    daily['Date'] = pd.to_datetime(daily['Date'])
-
-                    st.line_chart(
-                        daily.set_index('Date')[vacuum_col],
-                        use_container_width=True
-                    )
-
-                    # Show data summary
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("7-Day Average", f"{daily[vacuum_col].mean():.1f}\"")
-                    with col2:
-                        st.metric("Highest", f"{daily[vacuum_col].max():.1f}\"")
-                    with col3:
-                        st.metric("Lowest", f"{daily[vacuum_col].min():.1f}\"")
-                else:
-                    st.info("Not enough data for trend chart (need at least 1 day)")
+                st.info("Not enough data for trend chart (need at least 1 day)")
         else:
             st.info("No valid timestamp data for trends")
     else:
@@ -141,6 +215,83 @@ def render(vacuum_df, personnel_df):
             missing.append("timestamp column")
         st.warning(f"Cannot create trend chart - missing: {', '.join(missing)}")
 
+    st.divider()
+
+    # ============================================================================
+    # HOURLY DRILL-DOWN FOR SELECTED DAY
+    # ============================================================================
+    
+    st.subheader("🕐 Hourly Detail - Select a Day")
+    
+    if vacuum_col and timestamp_col:
+        temp_df = vacuum_df.copy()
+        temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
+        temp_df = temp_df.dropna(subset=[timestamp_col])
+        
+        # Get available dates
+        available_dates = sorted(temp_df[timestamp_col].dt.date.unique(), reverse=True)
+        
+        if len(available_dates) > 0:
+            selected_date = st.selectbox(
+                "Choose a date to see hourly breakdown:",
+                options=available_dates,
+                format_func=lambda x: x.strftime('%A, %B %d, %Y')
+            )
+            
+            # Filter to selected date
+            day_data = temp_df[temp_df[timestamp_col].dt.date == selected_date].copy()
+            
+            if not day_data.empty:
+                # Create hour column
+                day_data['Hour'] = day_data[timestamp_col].dt.hour
+                
+                # Aggregate by hour
+                hourly = day_data.groupby('Hour')[vacuum_col].mean().reset_index()
+                hourly = hourly.sort_values('Hour')
+                
+                # Create hourly chart
+                import plotly.graph_objects as go
+                
+                fig = go.Figure()
+                
+                fig.add_trace(go.Bar(
+                    x=hourly['Hour'],
+                    y=hourly[vacuum_col],
+                    marker_color='#4CAF50',
+                    hovertemplate='<b>Hour %{x}:00</b><br>Vacuum: %{y:.1f}"<extra></extra>'
+                ))
+                
+                fig.update_layout(
+                    xaxis=dict(
+                        title="Hour of Day",
+                        tickmode='linear',
+                        tick0=0,
+                        dtick=1
+                    ),
+                    yaxis_title="Average Vacuum (inches)",
+                    height=350,
+                    hovermode='x'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Summary stats
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Hours Recorded", len(hourly))
+                with col2:
+                    st.metric("Daily Average", f"{hourly[vacuum_col].mean():.1f}\"")
+                with col3:
+                    best_hour = hourly.loc[hourly[vacuum_col].idxmax(), 'Hour']
+                    st.metric("Best Hour", f"{int(best_hour)}:00")
+                with col4:
+                    worst_hour = hourly.loc[hourly[vacuum_col].idxmin(), 'Hour']
+                    st.metric("Worst Hour", f"{int(worst_hour)}:00")
+            else:
+                st.info(f"No data available for {selected_date}")
+        else:
+            st.info("No dates available for hourly analysis")
+    
     st.divider()
 
     # ============================================================================
@@ -293,6 +444,13 @@ def render(vacuum_df, personnel_df):
     # Tips
     with st.expander("💡 Understanding Vacuum Performance"):
         st.markdown("""
+        **What's New:**
+        
+        - 🍁 **Maple-Only View**: Automatically filters to show only maple systems
+        - 📈 **Temperature-Aware Trends**: Weekly view shows only days above freezing
+        - 🕐 **Hourly Drill-Down**: Select any day to see hour-by-hour vacuum levels
+        - 📊 **Improved Charts**: Cleaner daily trends with temperature overlay
+        
         **Metrics Explained:**
         
         - **Average**: Mean vacuum across all readings for this sensor
@@ -306,31 +464,24 @@ def render(vacuum_df, personnel_df):
         - 🟡 **Fair** (15-18"): Acceptable but monitor closely
         - 🔴 **Poor** (<15"): Needs attention, check for issues
         
-        **Multi-Site Viewing:**
+        **Using the Daily Trends:**
         
-        When viewing all sites:
-        - Trend chart shows both NY and VT lines
-        - Performance breakdown compares sites
-        - Site column helps identify location
-        - Compare average vacuum between sites
+        - Chart shows average vacuum by day
+        - Only displays days with temps above 32°F (optimal sap flow conditions)
+        - Temperature line helps correlate vacuum with weather
+        - If no days above freezing, shows all days
         
-        When viewing single site:
-        - Focused view of one location
-        - Cleaner presentation
-        - Site context in header
+        **Using the Hourly Detail:**
         
-        **Using This Page:**
-        
-        - **Daily**: Check overall trends and problem sensors
-        - **Weekly**: Review sensor performance distribution
-        - **Monthly**: Identify sensors needing preventive maintenance
-        - **Seasonal**: Track performance changes over time
+        - Select any date to see vacuum levels by hour
+        - Helps identify daily patterns (morning freeze-up, afternoon improvement)
+        - Useful for troubleshooting time-specific issues
+        - See which hours have best/worst performance
         
         **Best Practices:**
         
-        - Address poor-performing sensors promptly
-        - Track improvement after maintenance
+        - Focus on above-freezing days for meaningful trends
+        - Use hourly view to diagnose daily performance patterns
         - Compare similar sensors for patterns
-        - Monitor trends to predict issues
-        - Share insights between sites if patterns differ
-        """)
+        - Monitor maple systems specifically for sap quality
+        """)</document_content>
