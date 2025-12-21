@@ -323,4 +323,4 @@ def render(personnel_df):
         - **Site Assignment**: Use state tabs to see who works where
         - **Productivity**: Review job code breakdown to see task distribution
         - **Scheduling**: Balance workload across employees and sites
-        """
+        """)
