@@ -34,7 +34,6 @@ from page_modules import (
     sensor_map, 
     sap_forecast, 
     maintenance, 
-    daily_summary, 
     tapping, 
     data_quality
 )
@@ -161,7 +160,6 @@ def render_sidebar():
         page = st.radio(
             "Select Page",
             [
-                "📱 Daily Summary",
                 "🔧 Vacuum Performance",
                 "🌳 Tapping Operations",
                 "👥 Employee Performance",
@@ -399,9 +397,7 @@ def main():
                     )
 
     # Route to selected page
-    if page == "📱 Daily Summary":
-        daily_summary.render(vacuum_df, personnel_df)
-    elif page == "🔧 Vacuum Performance":
+    if page == "🔧 Vacuum Performance":
         vacuum.render(vacuum_df, personnel_df)
     elif page == "🌳 Tapping Operations":
         tapping.render(personnel_df, vacuum_df)
