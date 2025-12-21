@@ -484,4 +484,4 @@ def render(vacuum_df, personnel_df):
         - Use hourly view to diagnose daily performance patterns
         - Compare similar sensors for patterns
         - Monitor maple systems specifically for sap quality
-        """)</document_content>
+        """)
