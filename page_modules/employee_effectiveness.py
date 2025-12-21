@@ -1,7 +1,7 @@
 """
-Employee Effectiveness Page Module - MULTI-SITE ENHANCED
-Analyzes vacuum improvements based on employee maintenance work
-Now includes site tracking and cross-site comparison
+Leak Checking Page Module - MULTI-SITE ENHANCED
+Analyzes vacuum improvements specifically from leak repair work
+Tracks before/after vacuum levels for repair job codes
 """
 
 import streamlit as st
@@ -10,22 +10,66 @@ from metrics import calculate_employee_effectiveness
 
 
 def render(personnel_df, vacuum_df):
-    """Render employee effectiveness page showing vacuum improvements with site awareness"""
+    """Render leak checking page showing vacuum improvements from repair work with site awareness"""
 
-    st.title("⭐ Employee Effectiveness")
-    st.markdown("*Track vacuum improvements based on who worked where*")
+    st.title("⭐ Leak Checking")
+    st.markdown("*Track vacuum improvements from inseason repairs and tubing issue fixes*")
 
     if personnel_df.empty or vacuum_df.empty:
-        st.warning("Need both personnel and vacuum data for effectiveness analysis")
+        st.warning("Need both personnel and vacuum data for leak checking analysis")
         return
 
     # Check if we have site information
     has_personnel_site = 'Site' in personnel_df.columns
     has_vacuum_site = 'Site' in vacuum_df.columns
 
-    # Calculate effectiveness
-    with st.spinner("Analyzing employee effectiveness..."):
-        effectiveness_df = calculate_employee_effectiveness(personnel_df, vacuum_df)
+    # Find job code column
+    from utils import find_column
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode', 'task', 'work')
+    
+    if not job_col:
+        st.error("❌ Job code column not found in personnel data")
+        st.info("This page requires job code information to identify repair work. Available columns: " + ", ".join(personnel_df.columns))
+        return
+    
+    # Filter to only repair-related job codes
+    repair_keywords = ['inseason tubing repair', 'already identified tubing issue', 'tubing repair', 'leak repair', 'repair']
+    
+    # Create boolean mask for repair jobs (case insensitive)
+    repair_mask = personnel_df[job_col].str.lower().str.contains('|'.join(repair_keywords), na=False, case=False)
+    
+    repair_df = personnel_df[repair_mask].copy()
+    
+    # Show filtering info
+    total_sessions = len(personnel_df)
+    repair_sessions = len(repair_df)
+    
+    if repair_sessions == 0:
+        st.warning(f"⚠️ No repair work found in {total_sessions:,} personnel records")
+        st.info(f"""
+        **Looking for job codes containing:**
+        - "inseason tubing repair"
+        - "already identified tubing issue"
+        - Other repair-related keywords
+        
+        **Job codes found in your data:**
+        """)
+        unique_jobs = personnel_df[job_col].dropna().unique()
+        st.write(sorted(unique_jobs[:20]))
+        if len(unique_jobs) > 20:
+            st.caption(f"...and {len(unique_jobs) - 20} more")
+        return
+    
+    st.info(f"🔍 **Analyzing {repair_sessions:,} repair sessions** from {total_sessions:,} total work sessions ({repair_sessions/total_sessions*100:.1f}%)")
+    
+    # Show which job codes are included
+    repair_jobs = repair_df[job_col].unique()
+    with st.expander("📋 Repair job codes included in analysis"):
+        st.write(sorted(repair_jobs))
+
+    # Calculate effectiveness using only repair work
+    with st.spinner("Analyzing leak repair effectiveness..."):
+        effectiveness_df = calculate_employee_effectiveness(repair_df, vacuum_df)
 
     # Show debug info
     if hasattr(effectiveness_df, 'attrs') and 'debug_info' in effectiveness_df.attrs:
@@ -66,7 +110,7 @@ def render(personnel_df, vacuum_df):
             col1, col2 = st.columns(2)
 
             with col1:
-                st.write("**Personnel Mainlines:**")
+                st.write("**Repair Work Mainlines:**")
                 if debug['personnel_mainlines']:
                     st.write(sorted(list(debug['personnel_mainlines']))[:20])
                     if len(debug['personnel_mainlines']) > 20:
@@ -89,7 +133,7 @@ def render(personnel_df, vacuum_df):
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.metric("Total Work Sessions", debug['total_work_sessions'])
+                st.metric("Repair Sessions", debug['total_work_sessions'])
 
             with col2:
                 st.metric("Matching Mainlines", len(debug['matching_mainlines']))
@@ -98,12 +142,12 @@ def render(personnel_df, vacuum_df):
                 st.metric("Successful Matches", debug['success_count'])
 
             if debug['matching_mainlines']:
-                st.write("**Locations that match between datasets:**")
+                st.write("**Locations with repair work & vacuum data:**")
                 st.write(sorted(list(debug['matching_mainlines'])))
 
             st.divider()
 
-            st.write("**Why sessions didn't match:**")
+            st.write("**Why repair sessions didn't match:**")
             col1, col2, col3 = st.columns(3)
 
             with col1:
@@ -112,19 +156,20 @@ def render(personnel_df, vacuum_df):
 
             with col2:
                 st.metric("No Before Reading", debug['no_before_count'])
-                st.caption("No vacuum data 48h before work")
+                st.caption("No vacuum data 48h before repair")
 
             with col3:
                 st.metric("No After Reading", debug['no_after_count'])
-                st.caption("No vacuum data 48h after work")
+                st.caption("No vacuum data 48h after repair")
 
     if effectiveness_df.empty:
-        st.warning("Could not match employee work with vacuum readings.")
+        st.warning("Could not match repair work with vacuum readings.")
         st.info("""
         **Common issues:**
         - Mainline names don't match between personnel and vacuum data
-        - Not enough vacuum readings before/after work sessions (need within 48 hours)
+        - Not enough vacuum readings before/after repair work (need within 48 hours)
         - Date ranges don't overlap between datasets
+        - No repair work logged with recognized job codes
 
         **Check the debug info above to see specific issues!**
         """)
@@ -138,8 +183,8 @@ def render(personnel_df, vacuum_df):
             eff_merge = effectiveness_df[['Date', 'Employee', 'Mainline']].copy()
             
             # Get site from personnel data
-            if 'Date' in personnel_df.columns and 'Employee Name' in personnel_df.columns:
-                personnel_site = personnel_df[['Date', 'Employee Name', 'Site']].copy()
+            if 'Date' in repair_df.columns and 'Employee Name' in repair_df.columns:
+                personnel_site = repair_df[['Date', 'Employee Name', 'Site']].copy()
                 personnel_site.columns = ['Date', 'Employee', 'Site']
                 
                 # Merge to get site info
@@ -150,31 +195,31 @@ def render(personnel_df, vacuum_df):
                 )
 
     # Summary metrics
-    st.subheader("📊 Overall Impact")
+    st.subheader("📊 Leak Repair Impact")
 
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric("Work Sessions Analyzed", len(effectiveness_df))
+        st.metric("Repair Sessions Analyzed", len(effectiveness_df))
 
     with col2:
         avg_improvement = effectiveness_df['Improvement'].mean()
-        st.metric("Average Improvement", f"{avg_improvement:+.1f}\"",
+        st.metric("Avg Vac Improvement", f"{avg_improvement:+.1f}\"",
                   delta=f"{avg_improvement:.1f}\"" if avg_improvement > 0 else None)
 
     with col3:
         positive_sessions = len(effectiveness_df[effectiveness_df['Improvement'] > 0])
         success_rate = (positive_sessions / len(effectiveness_df)) * 100
-        st.metric("Success Rate", f"{success_rate:.0f}%")
+        st.metric("Successful Repairs", f"{success_rate:.0f}%")
 
     with col4:
         total_improvement = effectiveness_df['Improvement'].sum()
-        st.metric("Total Improvement", f"{total_improvement:+.1f}\"")
+        st.metric("Total Vac Gained", f"{total_improvement:+.1f}\"")
 
     # Site-specific metrics if available
     if 'Site' in effectiveness_df.columns:
         st.markdown("---")
-        st.subheader("🏢 Performance by Site")
+        st.subheader("🏢 Repair Performance by Site")
         
         site_cols = st.columns(3)
         
@@ -189,7 +234,7 @@ def render(personnel_df, vacuum_df):
                     st.metric("Avg Improvement", f"{site_avg:+.1f}\"")
                     
                     site_sessions = len(site_data)
-                    st.metric("Sessions", site_sessions)
+                    st.metric("Repairs", site_sessions)
                     
                     site_success = len(site_data[site_data['Improvement'] > 0]) / len(site_data) * 100
                     st.metric("Success Rate", f"{site_success:.0f}%")
@@ -197,7 +242,7 @@ def render(personnel_df, vacuum_df):
     st.divider()
 
     # Employee Rankings
-    st.subheader("🏆 Employee Rankings by Vacuum Improvement")
+    st.subheader("🏆 Leak Repair Effectiveness by Employee")
 
     employee_stats = effectiveness_df.groupby('Employee').agg({
         'Improvement': ['mean', 'sum', 'count'],
@@ -207,7 +252,7 @@ def render(personnel_df, vacuum_df):
     }).reset_index()
 
     employee_stats.columns = ['Employee', 'Avg_Improvement', 'Total_Improvement',
-                              'Sessions', 'Locations', 'Avg_Before', 'Avg_After']
+                              'Repairs', 'Locations', 'Avg_Before', 'Avg_After']
 
     # Add site information if available
     if 'Site' in effectiveness_df.columns:
@@ -234,11 +279,11 @@ def render(personnel_df, vacuum_df):
 
     # Select columns for display
     if 'Sites_Worked' in display.columns:
-        display_cols = ['Rank', 'Employee', 'Sites_Worked', 'Avg_Improvement', 'Sessions', 'Total_Improvement']
-        col_names = ['#', 'Employee', 'Sites', 'Avg Δ', 'Sessions', 'Total Δ']
+        display_cols = ['Rank', 'Employee', 'Sites_Worked', 'Avg_Before', 'Avg_After', 'Avg_Improvement', 'Repairs', 'Total_Improvement']
+        col_names = ['#', 'Employee', 'Sites', 'Vac Before', 'Vac After', 'Avg Δ', 'Repairs', 'Total Δ']
     else:
-        display_cols = ['Rank', 'Employee', 'Avg_Improvement', 'Sessions', 'Total_Improvement']
-        col_names = ['#', 'Employee', 'Avg Δ', 'Sessions', 'Total Δ']
+        display_cols = ['Rank', 'Employee', 'Avg_Before', 'Avg_After', 'Avg_Improvement', 'Repairs', 'Total_Improvement']
+        col_names = ['#', 'Employee', 'Vac Before', 'Vac After', 'Avg Δ', 'Repairs', 'Total Δ']
 
     display_table = display[display_cols].copy()
     display_table.columns = col_names
@@ -249,7 +294,7 @@ def render(personnel_df, vacuum_df):
 
     # Site comparison chart if applicable
     if 'Site' in effectiveness_df.columns and len(effectiveness_df['Site'].unique()) > 1:
-        st.subheader("📊 Cross-Site Effectiveness Comparison")
+        st.subheader("📊 Cross-Site Repair Effectiveness")
         
         import plotly.graph_objects as go
         
@@ -289,12 +334,12 @@ def render(personnel_df, vacuum_df):
         
         st.plotly_chart(fig, use_container_width=True)
         
-        st.caption("📈 Compare average vacuum improvement across sites to identify best practices")
+        st.caption("📈 Compare leak repair effectiveness across sites")
 
     st.divider()
 
     # Individual employee detail
-    st.subheader("📋 Individual Work Sessions")
+    st.subheader("📋 Individual Repair Sessions")
 
     selected_emp = st.selectbox("Select Employee", employee_stats['Employee'].tolist())
 
@@ -306,16 +351,16 @@ def render(personnel_df, vacuum_df):
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.metric("Total Sessions", len(emp_sessions))
+            st.metric("Total Repairs", len(emp_sessions))
 
         with col2:
             avg_imp = emp_sessions['Improvement'].mean()
-            st.metric("Average Improvement", f"{avg_imp:+.1f}\"")
+            st.metric("Avg Improvement", f"{avg_imp:+.1f}\"")
 
         with col3:
             positive = len(emp_sessions[emp_sessions['Improvement'] > 0])
             pct = (positive / len(emp_sessions)) * 100
-            st.metric("Positive Impact", f"{positive}/{len(emp_sessions)} ({pct:.0f}%)")
+            st.metric("Successful Repairs", f"{positive}/{len(emp_sessions)} ({pct:.0f}%)")
 
         with col4:
             if 'Site' in emp_sessions.columns:
@@ -324,13 +369,13 @@ def render(personnel_df, vacuum_df):
 
         # Site breakdown if available
         if 'Site' in emp_sessions.columns and len(emp_sessions['Site'].unique()) > 1:
-            st.markdown("**Performance by Site:**")
+            st.markdown("**Repair Performance by Site:**")
             
             site_perf = emp_sessions.groupby('Site').agg({
                 'Improvement': 'mean',
                 'Mainline': 'count'
             }).reset_index()
-            site_perf.columns = ['Site', 'Avg_Improvement', 'Sessions']
+            site_perf.columns = ['Site', 'Avg_Improvement', 'Repairs']
             
             cols = st.columns(len(site_perf))
             for idx, row in site_perf.iterrows():
@@ -339,10 +384,10 @@ def render(personnel_df, vacuum_df):
                     st.metric(
                         f"{emoji} {row['Site']}", 
                         f"{row['Avg_Improvement']:+.1f}\"",
-                        delta=f"{row['Sessions']} sessions"
+                        delta=f"{row['Repairs']} repairs"
                     )
 
-        st.subheader("Work History")
+        st.subheader("Repair History")
 
         # Display sessions
         display_sessions = emp_sessions.copy()
@@ -354,7 +399,7 @@ def render(personnel_df, vacuum_df):
         )
 
         cols_to_show = ['Date', 'Mainline', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
-        col_labels = ['Date', 'Location', 'Before', 'After', 'Change']
+        col_labels = ['Date', 'Location', 'Vac Before', 'Vac After', 'Change']
         
         if 'Site' in display_sessions.columns:
             # Add site emoji to location
@@ -363,7 +408,7 @@ def render(personnel_df, vacuum_df):
                 axis=1
             )
             cols_to_show = ['Date', 'Location_Display', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
-            col_labels = ['Date', 'Location', 'Before', 'After', 'Change']
+            col_labels = ['Date', 'Location', 'Vac Before', 'Vac After', 'Change']
         
         if 'Hours' in display_sessions.columns:
             cols_to_show.append('Hours')
@@ -375,7 +420,7 @@ def render(personnel_df, vacuum_df):
         st.dataframe(display_sessions, use_container_width=True, hide_index=True)
 
         # Chart of improvements over time
-        st.subheader("Improvement Trend")
+        st.subheader("Repair Improvement Trend")
 
         chart_data = emp_sessions[['Date', 'Improvement']].copy()
         chart_data = chart_data.sort_values('Date')
@@ -385,39 +430,46 @@ def render(personnel_df, vacuum_df):
 
     st.divider()
 
-    # Tips with multi-site context
-    with st.expander("💡 Understanding Employee Effectiveness"):
+    # Tips with leak checking focus
+    with st.expander("💡 Understanding Leak Checking Metrics"):
         st.markdown("""
-        **How This Works:**
+        **How Leak Checking Works:**
         
-        For each work session, we compare vacuum readings:
-        - **Before**: Average vacuum 48 hours before work
-        - **After**: Average vacuum 48 hours after work
-        - **Improvement**: After - Before (positive = good!)
+        This page specifically tracks vacuum improvements from repair work:
+        - **Filtered to repair jobs only**: "inseason tubing repairs" and "already identified tubing issues"
+        - **Before vacuum**: Average vacuum 48 hours BEFORE repair work started
+        - **After vacuum**: Average vacuum 48 hours AFTER repair work completed
+        - **Improvement**: After - Before (positive = successful leak repair!)
+        
+        **Why This Matters:**
+        - Identify which employees are most effective at finding and fixing leaks
+        - Verify that repair work actually improves vacuum levels
+        - Track repair effectiveness across sites
+        - Prioritize difficult locations that need experienced repair crews
+        
+        **What Makes a Good Repair:**
+        - **+5" or more**: Excellent repair, major leak fixed
+        - **+2" to +5"**: Good repair, solid improvement
+        - **0" to +2"**: Minor improvement, small leak fixed
+        - **Negative**: Problem may not be fixed, or new issue occurred
         
         **Multi-Site Features:**
+        - Compare repair effectiveness between NY and VT
         - Track which employees work at which sites
-        - Compare effectiveness across NY and VT
-        - Identify site-specific best practices
-        - Plan cross-site training opportunities
-        
-        **What Makes a Good Score:**
-        - **+5" or more**: Excellent work, major improvement
-        - **+2" to +5"**: Good work, solid improvement
-        - **0" to +2"**: Minor improvement or maintenance
-        - **Negative**: May indicate new problems or unrelated issues
+        - Identify site-specific leak patterns
+        - Share successful repair techniques across locations
         
         **Tips for Analysis:**
-        - Compare employees working the same site
-        - Look for patterns in high performers
-        - Use for training and recognition
-        - Consider site-specific challenges
-        - Some locations are naturally harder to maintain
+        - High performers should train others on leak detection
+        - Negative results might indicate systemic issues, not employee error
+        - Some leaks are harder to find/fix than others
+        - Track improvement over time as crew gains experience
+        - Compare employees working similar locations
         
         **Using This Data:**
-        - Recognize top performers publicly
-        - Provide targeted training for specific techniques
-        - Assign challenging locations to experienced crew
-        - Track improvement over time as crew gains experience
-        - Share best practices between sites
+        - Recognize employees who excel at leak repairs
+        - Assign challenging repairs to experienced crew
+        - Provide training for leak detection techniques
+        - Verify repairs are actually solving problems
+        - Schedule follow-up on locations with poor improvement
         """)
