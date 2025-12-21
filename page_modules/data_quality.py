@@ -1,12 +1,14 @@
 """
-Data Validation Page Module
+Alerts Page Module
 Detects anomalies and quality issues in timesheet and vacuum data
 
-TIER 1 DETECTIONS:
+ALERT TYPES:
+- Repairs needed field entries
+- Hours in excess of 12 per day
+- Rapid vacuum drops (3"+ faster than average)
 - Location mismatches (timesheet location ≠ vacuum sensor location)
 - Unmatched vacuum improvements (sensors improved but no timesheet entries)
 - Zero-impact maintenance (timesheet claims work but no vacuum improvements)
-- Date gaps (work logged on dates with no vacuum activity)
 """
 
 import streamlit as st
@@ -15,6 +17,197 @@ from datetime import datetime, timedelta
 from utils import find_column
 import gspread
 from google.oauth2.service_account import Credentials
+
+
+def detect_repairs_needed(personnel_df):
+    """
+    Detect entries where "Repairs needed" field has content
+    
+    Returns: DataFrame with alerts
+    """
+    alerts = []
+    
+    if personnel_df.empty:
+        return pd.DataFrame(alerts)
+    
+    # Find columns
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    repairs_col = find_column(personnel_df, 'Repairs needed', 'repairs', 'repair', 'repairs_needed')
+    mainline_col = find_column(personnel_df, 'mainline', 'Mainline', 'mainline.', 'location')
+    
+    if not all([emp_col, date_col, repairs_col]):
+        return pd.DataFrame(alerts)
+    
+    # Filter to records with repairs needed
+    repairs_df = personnel_df[
+        personnel_df[repairs_col].notna() & 
+        (personnel_df[repairs_col].astype(str).str.strip() != '') &
+        (personnel_df[repairs_col].astype(str).str.strip() != '0')
+    ].copy()
+    
+    for _, record in repairs_df.iterrows():
+        employee = record[emp_col]
+        date = record[date_col]
+        repair_note = str(record[repairs_col])
+        site = record.get('Site', 'UNK')
+        location = record.get(mainline_col, 'Unknown') if mainline_col else 'Unknown'
+        
+        alerts.append({
+            'Date': date,
+            'Employee': employee,
+            'Issue': 'Repairs Needed',
+            'Severity': 'HIGH',
+            'Details': f'{site} - {location}: {repair_note}',
+            'Site': site,
+            'Location': location,
+            'Repair_Note': repair_note
+        })
+    
+    return pd.DataFrame(alerts)
+
+
+def detect_excessive_hours(personnel_df):
+    """
+    Detect employees working more than 12 hours in a single day
+    
+    Returns: DataFrame with alerts
+    """
+    alerts = []
+    
+    if personnel_df.empty:
+        return pd.DataFrame(alerts)
+    
+    # Find columns
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    hours_col = find_column(personnel_df, 'Hours', 'hours', 'time', 'duration')
+    
+    if not all([emp_col, date_col, hours_col]):
+        return pd.DataFrame(alerts)
+    
+    # Group by employee and date, sum hours
+    daily_hours = personnel_df.groupby([emp_col, date_col])[hours_col].sum().reset_index()
+    daily_hours.columns = ['Employee', 'Date', 'Total_Hours']
+    
+    # Filter to excessive hours (>12)
+    excessive = daily_hours[daily_hours['Total_Hours'] > 12].copy()
+    
+    for _, record in excessive.iterrows():
+        employee = record['Employee']
+        date = record['Date']
+        hours = record['Total_Hours']
+        
+        # Get site info if available
+        day_records = personnel_df[
+            (personnel_df[emp_col] == employee) & 
+            (personnel_df[date_col] == date)
+        ]
+        site = day_records['Site'].iloc[0] if 'Site' in day_records.columns and len(day_records) > 0 else 'UNK'
+        
+        # Determine severity
+        if hours > 16:
+            severity = 'HIGH'
+        elif hours > 14:
+            severity = 'MEDIUM'
+        else:
+            severity = 'MEDIUM'
+        
+        alerts.append({
+            'Date': date,
+            'Employee': employee,
+            'Issue': 'Excessive Hours',
+            'Severity': severity,
+            'Details': f'{hours:.1f} hours worked in one day at {site}',
+            'Site': site,
+            'Hours': hours
+        })
+    
+    return pd.DataFrame(alerts)
+
+
+def detect_rapid_vac_drops(vacuum_df):
+    """
+    Detect systems with vacuum drops of 3"+ faster than average system drop
+    
+    Returns: DataFrame with alerts
+    """
+    alerts = []
+    
+    if vacuum_df.empty:
+        return pd.DataFrame(alerts)
+    
+    # Find columns
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor', 'mainline', 'location')
+    vacuum_col = find_column(vacuum_df, 'Vacuum', 'vacuum', 'reading', 'value')
+    timestamp_col = find_column(vacuum_df, 'Last communication', 'Last Communication', 'Timestamp', 'timestamp', 'time')
+    
+    if not all([sensor_col, vacuum_col, timestamp_col]):
+        return pd.DataFrame(alerts)
+    
+    # Convert to datetime and numeric
+    df = vacuum_df.copy()
+    df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+    df[vacuum_col] = pd.to_numeric(df[vacuum_col], errors='coerce')
+    df = df.dropna(subset=[timestamp_col, vacuum_col])
+    
+    if df.empty:
+        return pd.DataFrame(alerts)
+    
+    # Sort by sensor and time
+    df = df.sort_values([sensor_col, timestamp_col])
+    
+    # Calculate change from previous reading for each sensor
+    df['Vac_Change'] = df.groupby(sensor_col)[vacuum_col].diff()
+    df['Time_Diff_Hours'] = df.groupby(sensor_col)[timestamp_col].diff().dt.total_seconds() / 3600
+    
+    # Only look at readings within 24 hours of each other
+    df = df[(df['Time_Diff_Hours'] > 0) & (df['Time_Diff_Hours'] <= 24)]
+    
+    if df.empty:
+        return pd.DataFrame(alerts)
+    
+    # Calculate average drop across all systems (negative change = drop)
+    avg_drop = df['Vac_Change'].mean()
+    
+    # Find systems dropping 3"+ more than average
+    # If average drop is -2", then -5" would be 3" worse
+    threshold_drop = avg_drop - 3
+    
+    rapid_drops = df[df['Vac_Change'] < threshold_drop].copy()
+    
+    for _, record in rapid_drops.iterrows():
+        sensor = record[sensor_col]
+        current_vac = record[vacuum_col]
+        vac_change = record['Vac_Change']
+        timestamp = record[timestamp_col]
+        site = record.get('Site', 'UNK')
+        
+        # Calculate how much worse than average
+        worse_than_avg = abs(vac_change - avg_drop)
+        
+        # Determine severity
+        if worse_than_avg >= 5:
+            severity = 'HIGH'
+        elif worse_than_avg >= 4:
+            severity = 'MEDIUM'
+        else:
+            severity = 'MEDIUM'
+        
+        alerts.append({
+            'Date': timestamp.date() if pd.notna(timestamp) else None,
+            'Employee': 'System',
+            'Issue': 'Rapid Vac Drop',
+            'Severity': severity,
+            'Details': f'{site} - {sensor}: Dropped {abs(vac_change):.1f}" (avg drop: {abs(avg_drop):.1f}"), now at {current_vac:.1f}"',
+            'Site': site,
+            'Sensor': sensor,
+            'Vac_Drop': abs(vac_change),
+            'Current_Vac': current_vac,
+            'Avg_Drop': abs(avg_drop)
+        })
+    
+    return pd.DataFrame(alerts)
 
 
 def detect_location_mismatches(personnel_df, vacuum_df):
@@ -72,7 +265,7 @@ def detect_location_mismatches(personnel_df, vacuum_df):
                     'Date': date,
                     'Employee': employee,
                     'Issue': 'Location Mismatch',
-                    'Severity': 'HIGH',
+                    'Severity': 'MEDIUM',
                     'Details': f'Timesheet: {timesheet_site}, Sensors worked: {other_site} ({sensor_count} sensors)',
                     'Timesheet_Site': timesheet_site,
                     'Sensor_Site': other_site,
@@ -192,7 +385,7 @@ def detect_zero_impact_maintenance(personnel_df, vacuum_df):
                     'Date': date,
                     'Employee': employee,
                     'Issue': 'Zero Impact',
-                    'Severity': 'HIGH' if hours >= 8 else 'MEDIUM',
+                    'Severity': 'MEDIUM' if hours >= 8 else 'LOW',
                     'Details': f'{hours} hours logged, no vacuum data found for {site}',
                     'Hours': hours,
                     'Site': site,
@@ -209,7 +402,7 @@ def detect_zero_impact_maintenance(personnel_df, vacuum_df):
                         'Date': date,
                         'Employee': employee,
                         'Issue': 'Zero Impact',
-                        'Severity': 'MEDIUM',
+                        'Severity': 'LOW',
                         'Details': f'{hours} hours logged, only {improvement_count} sensors improved at {site}',
                         'Hours': hours,
                         'Site': site,
@@ -246,12 +439,12 @@ def load_manager_notes(sheet_url, credentials_path):
         # Open the personnel sheet (we'll add notes tab there)
         sheet = client.open_by_url(sheet_url)
         
-        # Try to get Data_Quality_Notes worksheet
+        # Try to get Alerts_Notes worksheet
         try:
-            worksheet = sheet.worksheet('Data_Quality_Notes')
+            worksheet = sheet.worksheet('Alerts_Notes')
         except:
             # Create it if it doesn't exist
-            worksheet = sheet.add_worksheet(title='Data_Quality_Notes', rows=1000, cols=10)
+            worksheet = sheet.add_worksheet(title='Alerts_Notes', rows=1000, cols=10)
             # Add headers
             worksheet.update('A1:H1', [[
                 'Timestamp', 'Date', 'Employee', 'Issue', 'Severity', 
@@ -290,7 +483,7 @@ def save_manager_note(sheet_url, credentials_path, note_data):
         
         client = gspread.authorize(creds)
         sheet = client.open_by_url(sheet_url)
-        worksheet = sheet.worksheet('Data_Quality_Notes')
+        worksheet = sheet.worksheet('Alerts_Notes')
         
         # Prepare row
         row = [
@@ -315,19 +508,19 @@ def save_manager_note(sheet_url, credentials_path, note_data):
 
 def render(personnel_df, vacuum_df):
     """
-    Main render function for Data Validation page
+    Main render function for Alerts page
     
     Args:
         personnel_df: Personnel timesheet data
         vacuum_df: Vacuum sensor data
     """
-    st.title("⚠️ Data Validation")
+    st.title("⚠️ Alerts")
     st.markdown("---")
     
     # Check for empty data
-    if personnel_df.empty or vacuum_df.empty:
-        st.warning("Insufficient data for validation analysis")
-        st.info("Both personnel and vacuum data are required for data validation")
+    if personnel_df.empty and vacuum_df.empty:
+        st.warning("Insufficient data for alert analysis")
+        st.info("Personnel and/or vacuum data required for alerts")
         return
     
     # Get configuration
@@ -343,7 +536,7 @@ def render(personnel_df, vacuum_df):
     
     # Description
     st.markdown("""
-    This page automatically detects potential data quality issues by cross-analyzing 
+    This page automatically detects issues requiring attention by analyzing 
     timesheet and vacuum data. Review flagged items and add manager notes as needed.
     """)
     
@@ -362,25 +555,37 @@ def render(personnel_df, vacuum_df):
         cutoff_date = pd.Timestamp(datetime.now().date() - timedelta(days=days))
         
         # Ensure Date columns are datetime
-        if 'Date' in personnel_df.columns:
+        if 'Date' in personnel_df.columns and not personnel_df.empty:
             personnel_df = personnel_df.copy()
             personnel_df['Date'] = pd.to_datetime(personnel_df['Date'])
             personnel_df = personnel_df[personnel_df['Date'] >= cutoff_date]
         
-        if 'Date' in vacuum_df.columns:
+        if 'Date' in vacuum_df.columns and not vacuum_df.empty:
             vacuum_df = vacuum_df.copy()
             vacuum_df['Date'] = pd.to_datetime(vacuum_df['Date'])
             vacuum_df = vacuum_df[vacuum_df['Date'] >= cutoff_date]
     
-    # Run detections
-    with st.spinner('Analyzing data for quality issues...'):
-        location_alerts = detect_location_mismatches(personnel_df, vacuum_df)
-        unmatched_alerts = detect_unmatched_improvements(vacuum_df, personnel_df)
-        zero_impact_alerts = detect_zero_impact_maintenance(personnel_df, vacuum_df)
+    # Run all detections
+    with st.spinner('Analyzing data for alerts...'):
+        # New alert types
+        repairs_alerts = detect_repairs_needed(personnel_df) if not personnel_df.empty else pd.DataFrame()
+        excessive_hours_alerts = detect_excessive_hours(personnel_df) if not personnel_df.empty else pd.DataFrame()
+        rapid_drop_alerts = detect_rapid_vac_drops(vacuum_df) if not vacuum_df.empty else pd.DataFrame()
+        
+        # Original alert types
+        location_alerts = detect_location_mismatches(personnel_df, vacuum_df) if not personnel_df.empty and not vacuum_df.empty else pd.DataFrame()
+        unmatched_alerts = detect_unmatched_improvements(vacuum_df, personnel_df) if not personnel_df.empty and not vacuum_df.empty else pd.DataFrame()
+        zero_impact_alerts = detect_zero_impact_maintenance(personnel_df, vacuum_df) if not personnel_df.empty and not vacuum_df.empty else pd.DataFrame()
         
         # Combine all alerts
-        all_alerts = pd.concat([location_alerts, unmatched_alerts, zero_impact_alerts], 
-                               ignore_index=True)
+        all_alerts = pd.concat([
+            repairs_alerts, 
+            excessive_hours_alerts,
+            rapid_drop_alerts,
+            location_alerts, 
+            unmatched_alerts, 
+            zero_impact_alerts
+        ], ignore_index=True)
     
     # Display summary metrics
     st.markdown("### 📊 Alert Summary")
@@ -510,7 +715,7 @@ def render(personnel_df, vacuum_df):
             st.info("No alerts match the selected filters")
     
     else:
-        st.success("✅ No data quality issues detected!")
+        st.success("✅ No alerts detected!")
         st.balloons()
     
     # Show existing manager notes
@@ -538,3 +743,40 @@ def render(personnel_df, vacuum_df):
             st.info("No manager notes in selected date range")
     else:
         st.info("No manager notes recorded yet")
+    
+    # Tips
+    st.markdown("---")
+    with st.expander("💡 Understanding Alerts"):
+        st.markdown("""
+        **New Alert Types:**
+        
+        1. **Repairs Needed** 🔴 HIGH
+           - Triggered when "Repairs needed" field has content
+           - Shows location and repair description
+           - Requires immediate attention
+        
+        2. **Excessive Hours** 🟡 MEDIUM/HIGH
+           - Flags employees working >12 hours in one day
+           - HIGH if >16 hours, MEDIUM if 12-16 hours
+           - Check for data entry errors or overtime approval
+        
+        3. **Rapid Vac Drop** 🟡 MEDIUM/HIGH
+           - Detects systems dropping 3"+ faster than average
+           - HIGH if 5"+ worse than average
+           - May indicate freeze-up, major leak, or system failure
+        
+        **Original Alert Types:**
+        
+        - **Location Mismatch**: Timesheet site doesn't match sensor locations worked
+        - **Unmatched Improvements**: Sensors improved but no timesheet entries
+        - **Zero Impact**: Maintenance logged but no vacuum improvements
+        
+        **Using This Page:**
+        
+        - Review HIGH priority alerts first
+        - Add manager notes to document actions taken
+        - Mark status as you investigate/resolve issues
+        - Check "Repairs Needed" daily for maintenance requests
+        - Monitor excessive hours for safety and compliance
+        - Rapid vac drops may need emergency response
+        """)
