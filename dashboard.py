@@ -164,7 +164,7 @@ def render_sidebar():
                 "👥 Employee Performance",
                 "⭐ Employee Effectiveness",
                 "🔧 Maintenance & Leaks",
-                "⚠️ Data Validation",
+                "⚠️ Alerts",
                 "🌍 Interactive Map",
                 "🌡️ Sap Flow Forecast",
                 "📊 Raw Data"
@@ -405,7 +405,7 @@ def main():
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
-    elif page == "⚠️ Data Validation":
+    elif page == "⚠️ Alerts":
         data_quality.render(personnel_df, vacuum_df)
     elif page == "🌍 Interactive Map":
         sensor_map.render(vacuum_df, personnel_df)
