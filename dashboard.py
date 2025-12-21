@@ -5,8 +5,8 @@ Main application entry point - refactored and modular
 This is the main dashboard file that orchestrates all pages and data loading.
 All complex logic has been moved to separate modules for better maintainability.
 
-MULTI-SITE: Supports NY and VT operations with site filtering
-UPDATED: Now works with both local .env files AND Streamlit Cloud secrets!
+MULTI-SITE: Supports NY and VT operations with site selection on login
+UPDATED: Site selection screen after password, before dashboard
 """
 
 import streamlit as st
@@ -36,7 +36,23 @@ from page_modules import (
     tapping, 
     data_quality
 )
-#password
+
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
+st.set_page_config(
+    page_title=config.PAGE_TITLE,
+    page_icon=config.PAGE_ICON,
+    layout=config.PAGE_LAYOUT,
+    initial_sidebar_state="expanded"
+)
+
+
+# ============================================================================
+# AUTHENTICATION & SITE SELECTION
+# ============================================================================
+
 def check_password():
     """Returns `True` if the user had the correct password."""
 
@@ -71,21 +87,52 @@ def check_password():
         # Password correct
         return True
 
-# Check password before showing dashboard
+
+def site_selection_screen():
+    """Show site selection screen after successful password entry"""
+    
+    # Apply custom styling
+    apply_custom_css()
+    
+    # Center column for better presentation
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        st.title("🍁 Forest Farmers Dashboard")
+        st.markdown("---")
+        st.subheader("🏢 Select Your Site")
+        st.markdown("Choose which operation you'd like to view:")
+        
+        # Site selection buttons
+        col_ny, col_vt, col_both = st.columns(3)
+        
+        with col_ny:
+            if st.button("🟦 **New York**\n\nNY Operations", use_container_width=True, key="btn_ny"):
+                st.session_state["selected_site"] = "NY"
+                st.rerun()
+        
+        with col_vt:
+            if st.button("🟩 **Vermont**\n\nVT Operations", use_container_width=True, key="btn_vt"):
+                st.session_state["selected_site"] = "VT"
+                st.rerun()
+        
+        with col_both:
+            if st.button("📊 **Both Sites**\n\nAll Operations", use_container_width=True, key="btn_both"):
+                st.session_state["selected_site"] = "All Sites"
+                st.rerun()
+        
+        st.markdown("---")
+        st.caption("💡 You can change sites anytime using the button in the sidebar")
+
+
+# Check password before showing anything
 if not check_password():
     st.stop()  # Don't continue if password is wrong
 
-
-# ============================================================================
-# PAGE CONFIGURATION
-# ============================================================================
-
-st.set_page_config(
-    page_title=config.PAGE_TITLE,
-    page_icon=config.PAGE_ICON,
-    layout=config.PAGE_LAYOUT,
-    initial_sidebar_state="expanded"
-)
+# Check if site has been selected
+if "selected_site" not in st.session_state:
+    site_selection_screen()
+    st.stop()  # Don't continue until site is selected
 
 
 # ============================================================================
@@ -153,6 +200,23 @@ def render_sidebar():
 
     with st.sidebar:
         st.title("🍁 Forest Farmers Dashboard")
+        
+        # Show current site selection with visual indicator
+        current_site = st.session_state.get("selected_site", "All Sites")
+        
+        if current_site == "NY":
+            st.info("🟦 **Viewing: New York**")
+        elif current_site == "VT":
+            st.info("🟩 **Viewing: Vermont**")
+        else:
+            st.info("📊 **Viewing: Both Sites**")
+        
+        # Change site button
+        if st.button("🔄 Change Site", use_container_width=True):
+            del st.session_state["selected_site"]
+            st.rerun()
+        
+        st.divider()
 
         # Page selection - PRIMARY NAVIGATION
         st.subheader("📄 Pages")
@@ -174,26 +238,6 @@ def render_sidebar():
 
         st.divider()
 
-        # SITE FILTER - NEW!
-        st.subheader("🏢 Site Selection")
-        site_filter = st.selectbox(
-            "Select site:",
-            options=["All Sites", "NY", "VT", "UNK"],
-            index=0,
-            help="Filter data by site location"
-        )
-
-        if site_filter == "All Sites":
-            st.caption("📊 Showing combined NY + VT data")
-        elif site_filter == "NY":
-            st.caption("🟦 New York operations only")
-        elif site_filter == "VT":
-            st.caption("🟩 Vermont operations only")
-        else:
-            st.caption("⚫ Unknown/unclassified locations")
-
-        st.divider()
-
         # Data range filter
         st.subheader("⏱️ Data Range")
         days_to_load = st.selectbox(
@@ -204,7 +248,7 @@ def render_sidebar():
         )
 
         st.caption(
-            "💡 Employee Effectiveness always loads 30+ days for accurate comparisons"
+            "💡 Leak Checking loads 30+ days for accurate analysis"
         )
 
         st.divider()
@@ -234,10 +278,12 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v5.0 Multi-Site | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v6.0 Site Selection | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
-        st.caption("Click 'Refresh Data' to reload")
 
+    # Get site filter from session state
+    site_filter = st.session_state.get("selected_site", "All Sites")
+    
     return page, days_to_load, recent_threshold, site_filter
 
 
@@ -256,19 +302,19 @@ def load_data(days_to_load):
         st.error("⚠️ Configuration Error")
         st.info("""
         **For Streamlit Cloud:** Add these to your app secrets:
-        ```
+```
         [sheets]
         NY_VACUUM_SHEET_URL = "your-ny-vacuum-sheet-url"
         VT_VACUUM_SHEET_URL = "your-vt-vacuum-sheet-url"
         PERSONNEL_SHEET_URL = "your-personnel-sheet-url"
-        ```
+```
         
         **For Local Development:** Create a `.env` file with:
-        ```
+```
         NY_VACUUM_SHEET_URL=your-ny-vacuum-sheet-url
         VT_VACUUM_SHEET_URL=your-vt-vacuum-sheet-url
         PERSONNEL_SHEET_URL=your-personnel-sheet-url
-        ```
+```
         """)
         st.stop()
 
@@ -364,15 +410,25 @@ def main():
     # Show data loading info
     show_data_info(vacuum_df, personnel_df)
 
-    # Filter by site
+    # Filter by site (based on login selection)
     vacuum_df, personnel_df = filter_data_by_site(vacuum_df, personnel_df, site_filter)
 
-    # Show filtering info
-    if site_filter != "All Sites":
+    # Show filtering info at top of page
+    if site_filter == "NY":
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.info(f"🏢 Viewing {site_filter} site only - {sensor_count} sensors")
+            st.success(f"🟦 **New York View** - {sensor_count} sensors")
+    elif site_filter == "VT":
+        sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
+        if not vacuum_df.empty and sensor_col:
+            sensor_count = vacuum_df[sensor_col].nunique()
+            st.success(f"🟩 **Vermont View** - {sensor_count} sensors")
+    else:
+        sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
+        if not vacuum_df.empty and sensor_col:
+            sensor_count = vacuum_df[sensor_col].nunique()
+            st.success(f"📊 **All Sites View** - {sensor_count} sensors combined")
 
     # Apply recent sensor filter if enabled
     if recent_threshold is not None:
