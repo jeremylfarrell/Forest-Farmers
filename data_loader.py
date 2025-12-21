@@ -283,7 +283,7 @@ def process_vacuum_data(df):
     timestamp_columns = []
     for possible_name in ['Scrape_Timestamp', 'Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
                           'Last Communication', 'Last communication', 'last communication',
-                          'Time', 'time']:
+                          'Time', 'time', 'Delay']:
         if possible_name in df.columns:
             timestamp_columns.append(possible_name)
     
@@ -293,11 +293,18 @@ def process_vacuum_data(df):
         if pd.api.types.is_numeric_dtype(df[timestamp_col]):
             # Convert Excel serial dates to datetime
             # Excel dates are days since 1899-12-30
+            # Filter out negative and invalid values first
+            df_col_copy = df[timestamp_col].copy()
+            
+            # Replace negative values and zeros with NaN (they're invalid dates)
+            df_col_copy = df_col_copy.apply(lambda x: x if (pd.notna(x) and x > 0) else pd.NA)
+            
             try:
-                df[timestamp_col] = pd.to_datetime(df[timestamp_col], unit='D', origin='1899-12-30', errors='coerce')
-            except:
+                # Convert valid Excel serial dates
+                df[timestamp_col] = pd.to_datetime(df_col_copy, unit='D', origin='1899-12-30', errors='coerce')
+            except Exception as e:
                 # Fallback to regular datetime conversion
-                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                df[timestamp_col] = pd.to_datetime(df_col_copy, errors='coerce')
         else:
             # Regular string dates
             df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
@@ -305,18 +312,24 @@ def process_vacuum_data(df):
     # Use the first valid timestamp column for primary Timestamp field
     if timestamp_columns:
         primary_timestamp = timestamp_columns[0]
-        df['Timestamp'] = df[primary_timestamp]
+        if primary_timestamp in df.columns:
+            df['Timestamp'] = df[primary_timestamp]
 
-        # Add derived columns
-        df['Date'] = df['Timestamp'].dt.date
-        df['Hour'] = df['Timestamp'].dt.hour
+            # Add derived columns
+            df['Date'] = df['Timestamp'].dt.date
+            df['Hour'] = df['Timestamp'].dt.hour
 
-        # Remove rows with invalid timestamps
-        df = df.dropna(subset=['Timestamp'])
+            # Remove rows with invalid timestamps
+            df = df.dropna(subset=['Timestamp'])
     else:
         # No timestamp column found - create a default one with current time
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
+
+    
+
+
+    
     # Convert vacuum reading to numeric
     vacuum_cols = [col for col in df.columns if 'vacuum' in col.lower() or 'reading' in col.lower()]
     for col in vacuum_cols:
