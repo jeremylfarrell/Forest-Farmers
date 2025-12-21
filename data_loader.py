@@ -288,9 +288,21 @@ def process_vacuum_data(df):
             timestamp_col = possible_name
             break
 
-    # Convert timestamp to datetime if found
+# Convert timestamp to datetime if found
     if timestamp_col:
-        df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
+        # First, check if we have Excel serial dates (numeric values like 45991.06957)
+        # These need special handling
+        if pd.api.types.is_numeric_dtype(df[timestamp_col]):
+            # Convert Excel serial dates to datetime
+            # Excel dates are days since 1899-12-30
+            try:
+                df['Timestamp'] = pd.to_datetime(df[timestamp_col], unit='D', origin='1899-12-30', errors='coerce')
+            except:
+                # Fallback to regular datetime conversion
+                df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
+        else:
+            # Regular string dates
+            df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
 
         # Add derived columns
         df['Date'] = df['Timestamp'].dt.date
@@ -298,6 +310,7 @@ def process_vacuum_data(df):
 
         # Remove rows with invalid timestamps
         df = df.dropna(subset=['Timestamp'])
+        
     else:
         # No timestamp column found - create a default one with current time
         # This allows the dashboard to work even without timestamps
