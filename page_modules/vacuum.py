@@ -52,31 +52,22 @@ def render(vacuum_df, personnel_df):
         st.warning("No vacuum data available")
         return
 
-    # ============================================================================
+# ============================================================================
     # MAPLE-ONLY FILTERING
     # ============================================================================
     
-    sensor_col = find_column(vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location')
+    # Look for Station column (should be 4th column)
+    station_col = find_column(vacuum_df, 'Station', 'station')
     
-    if sensor_col:
+    if station_col:
         original_count = len(vacuum_df)
         
-        # Filter to only sensors that start with "maple" (case-insensitive)
+        # Filter to only stations that contain "maple" anywhere in the cell (case-insensitive)
         vacuum_df = vacuum_df[
-            vacuum_df[sensor_col].str.lower().str.startswith('maple', na=False)
+            vacuum_df[station_col].str.lower().str.contains('maple', na=False, case=False)
         ].copy()
         
         filtered_count = len(vacuum_df)
-        
-        if filtered_count < original_count:
-            st.info(f"🍁 **Showing maple systems only** - {filtered_count:,} readings from maple sensors (filtered out {original_count - filtered_count:,} non-maple readings)")
-        else:
-            st.info(f"🍁 **Maple systems** - {filtered_count:,} sensor readings")
-    
-    if vacuum_df.empty:
-        st.warning("No maple sensor data available after filtering")
-        return
-
     # Check if we have site information and if we're viewing a specific site
     has_site = 'Site' in vacuum_df.columns
     viewing_site = None
