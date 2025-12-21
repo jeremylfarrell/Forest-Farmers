@@ -288,21 +288,33 @@ def process_vacuum_data(df):
             timestamp_col = possible_name
             break
 
-# Convert timestamp to datetime if found
-    if timestamp_col:
-        # First, check if we have Excel serial dates (numeric values like 45991.06957)
-        # These need special handling
+# Find ALL timestamp/date columns - process each one
+    timestamp_columns = []
+    for possible_name in ['Scrape_Timestamp', 'Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
+                          'Last Communication', 'Last communication', 'last communication',
+                          'Time', 'time']:
+        if possible_name in df.columns:
+            timestamp_columns.append(possible_name)
+    
+    # Process each timestamp column found
+    for timestamp_col in timestamp_columns:
+        # Check if we have Excel serial dates (numeric values like 45991.06957)
         if pd.api.types.is_numeric_dtype(df[timestamp_col]):
             # Convert Excel serial dates to datetime
             # Excel dates are days since 1899-12-30
             try:
-                df['Timestamp'] = pd.to_datetime(df[timestamp_col], unit='D', origin='1899-12-30', errors='coerce')
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col], unit='D', origin='1899-12-30', errors='coerce')
             except:
                 # Fallback to regular datetime conversion
-                df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
         else:
             # Regular string dates
-            df['Timestamp'] = pd.to_datetime(df[timestamp_col], errors='coerce')
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+    
+    # Use the first valid timestamp column for primary Timestamp field
+    if timestamp_columns:
+        primary_timestamp = timestamp_columns[0]
+        df['Timestamp'] = df[primary_timestamp]
 
         # Add derived columns
         df['Date'] = df['Timestamp'].dt.date
@@ -310,13 +322,11 @@ def process_vacuum_data(df):
 
         # Remove rows with invalid timestamps
         df = df.dropna(subset=['Timestamp'])
-        
     else:
         # No timestamp column found - create a default one with current time
-        # This allows the dashboard to work even without timestamps
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
-
+        
     # Convert vacuum reading to numeric
     vacuum_cols = [col for col in df.columns if 'vacuum' in col.lower() or 'reading' in col.lower()]
     for col in vacuum_cols:
