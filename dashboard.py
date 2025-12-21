@@ -29,7 +29,6 @@ from page_modules import (
     vacuum, 
     employees, 
     employee_effectiveness, 
-    problem_clusters, 
     raw_data, 
     sensor_map, 
     sap_forecast, 
@@ -166,7 +165,6 @@ def render_sidebar():
                 "⭐ Employee Effectiveness",
                 "🔧 Maintenance & Leaks",
                 "⚠️ Data Validation",
-                "🗺️ Problem Clusters",
                 "🌍 Interactive Map",
                 "🌡️ Sap Flow Forecast",
                 "📊 Raw Data"
@@ -409,8 +407,6 @@ def main():
         maintenance.render(vacuum_df, personnel_df)
     elif page == "⚠️ Data Validation":
         data_quality.render(personnel_df, vacuum_df)
-    elif page == "🗺️ Problem Clusters":
-        problem_clusters.render(vacuum_df)
     elif page == "🌍 Interactive Map":
         sensor_map.render(vacuum_df, personnel_df)
     elif page == "🌡️ Sap Flow Forecast":
