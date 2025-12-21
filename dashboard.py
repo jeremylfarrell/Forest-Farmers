@@ -162,7 +162,7 @@ def render_sidebar():
                 "🔧 Vacuum Performance",
                 "🌳 Tapping Operations",
                 "👥 Employee Performance",
-                "⭐ Employee Effectiveness",
+                "⭐ Leak Checking",
                 "🔧 Maintenance & Leaks",
                 "⚠️ Alerts",
                 "🌍 Interactive Map",
@@ -401,7 +401,7 @@ def main():
         tapping.render(personnel_df, vacuum_df)
     elif page == "👥 Employee Performance":
         employees.render(personnel_df)
-    elif page == "⭐ Employee Effectiveness":
+    elif page == "⭐ Leak Checking":
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
