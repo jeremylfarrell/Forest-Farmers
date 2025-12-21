@@ -658,8 +658,19 @@ def render(personnel_df, vacuum_df):
             # Sort by severity and date
             severity_order = {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}
             filtered_alerts['severity_order'] = filtered_alerts['Severity'].map(severity_order)
-            filtered_alerts = filtered_alerts.sort_values(['severity_order', 'Date'], ascending=[True, False])
-            filtered_alerts = filtered_alerts.drop('severity_order', axis=1)
+            
+            # Convert Date to datetime for proper sorting, handling NaT values
+            filtered_alerts['Date_Sort'] = pd.to_datetime(filtered_alerts['Date'], errors='coerce')
+            
+            # Sort by severity first, then date (nulls last)
+            filtered_alerts = filtered_alerts.sort_values(
+                ['severity_order', 'Date_Sort'], 
+                ascending=[True, False],
+                na_position='last'
+            )
+            
+            # Clean up helper columns
+            filtered_alerts = filtered_alerts.drop(['severity_order', 'Date_Sort'], axis=1)
             
             # Display each alert as an expandable card
             for idx, alert in filtered_alerts.iterrows():
