@@ -13,12 +13,10 @@ __all__ = [
     'vacuum',
     'employees',
     'employee_effectiveness',
-    'problem_clusters',
     'raw_data',
     'sensor_map',
     'data_quality',
     'sap_forecast',
     'maintenance',
-    'daily_summary',
     'tapping'
 ]
