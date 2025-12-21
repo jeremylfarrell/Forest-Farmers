@@ -279,15 +279,6 @@ def process_vacuum_data(df):
     if df.empty:
         return df
 
-    # Find timestamp/date column - try multiple possible names
-    timestamp_col = None
-    for possible_name in ['Scrape_Timestamp', 'Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
-                          'Last Communication', 'Last communication', 'last communication',
-                          'Time', 'time']:
-        if possible_name in df.columns:
-            timestamp_col = possible_name
-            break
-
 # Find ALL timestamp/date columns - process each one
     timestamp_columns = []
     for possible_name in ['Scrape_Timestamp', 'Timestamp', 'timestamp', 'Date', 'date', 'DateTime', 'datetime',
@@ -326,7 +317,6 @@ def process_vacuum_data(df):
         # No timestamp column found - create a default one with current time
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
-        
     # Convert vacuum reading to numeric
     vacuum_cols = [col for col in df.columns if 'vacuum' in col.lower() or 'reading' in col.lower()]
     for col in vacuum_cols:
