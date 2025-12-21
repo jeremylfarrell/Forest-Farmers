@@ -1,7 +1,7 @@
 """
 Tapping Productivity Page Module - MULTI-SITE ENHANCED
 Track tapping operations, employee productivity, and seasonal progress
-Now includes site-specific metrics and cross-site comparisons
+UPDATED: Site-wide efficiency, minutes per tap by job type
 """
 
 import streamlit as st
@@ -31,6 +31,7 @@ def render(personnel_df, vacuum_df):
     hours_col = find_column(personnel_df, 'Hours', 'hours', 'time')
     rate_col = find_column(personnel_df, 'Rate', 'rate', 'pay_rate', 'hourly_rate')
     mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode', 'task', 'work')
 
     # Tapping columns
     taps_in_col = find_column(personnel_df, 'Taps Put In', 'taps_in', 'taps put in')
@@ -68,6 +69,11 @@ def render(personnel_df, vacuum_df):
     df['Employee'] = df[emp_col]
     if mainline_col:
         df['Mainline'] = df[mainline_col]
+    
+    if job_col:
+        df['Job_Code'] = df[job_col]
+    else:
+        df['Job_Code'] = 'Unknown'
 
     # Calculate net taps (taps added minus taps removed)
     df['Net_Taps'] = df['Taps_In'] - df['Taps_Out']
@@ -76,7 +82,7 @@ def render(personnel_df, vacuum_df):
     df['Labor_Cost'] = df['Hours'] * df['Rate']
 
     # ========================================================================
-    # OVERALL SUMMARY WITH SITE BREAKDOWN
+    # OVERALL SUMMARY (NO SITE BREAKDOWN)
     # ========================================================================
 
     st.subheader("📊 Season Summary")
@@ -105,37 +111,9 @@ def render(personnel_df, vacuum_df):
         total_repairs = df['Repairs'].sum()
         st.metric("Repairs Needed", f"{int(total_repairs):,}")
 
-    # Site breakdown if available
-    if has_site:
-        st.markdown("---")
-        st.subheader("🏢 Breakdown by Site")
-        
-        site_summary = df.groupby('Site').agg({
-            'Taps_In': 'sum',
-            'Taps_Out': 'sum',
-            'Net_Taps': 'sum',
-            'Labor_Cost': 'sum',
-            'Hours': 'sum'
-        }).reset_index()
-        
-        cols = st.columns(len(site_summary))
-        
-        for idx, row in site_summary.iterrows():
-            with cols[idx]:
-                emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
-                st.markdown(f"### {emoji} {row['Site']}")
-                
-                st.metric("Taps Installed", f"{int(row['Taps_In']):,}")
-                st.metric("Net Change", f"{int(row['Net_Taps']):,}")
-                
-                # Calculate cost per tap for this site
-                if row['Taps_In'] > 0:
-                    cost_per_tap = row['Labor_Cost'] / row['Taps_In']
-                    st.metric("Cost/Tap", f"${cost_per_tap:.2f}")
-
-    # COMPANY-WIDE EFFICIENCY METRICS
+    # SITE-WIDE EFFICIENCY METRICS
     st.divider()
-    st.subheader("💰 Company-Wide Efficiency")
+    st.subheader("💰 Site-Wide Efficiency")
 
     total_hours = df['Hours'].sum()
     total_labor_cost = df['Labor_Cost'].sum()
@@ -157,55 +135,6 @@ def render(personnel_df, vacuum_df):
 
     with col4:
         st.metric("Total Labor Cost", f"${total_labor_cost:,.2f}")
-
-    # Site comparison chart if applicable
-    if has_site and len(site_summary) > 1:
-        st.divider()
-        st.subheader("📊 Site Cost Comparison")
-        
-        # Prepare data for chart
-        chart_data = site_summary[site_summary['Taps_In'] > 0].copy()
-        chart_data['Cost_Per_Tap'] = chart_data['Labor_Cost'] / chart_data['Taps_In']
-        
-        # Color code
-        colors = []
-        for site in chart_data['Site']:
-            if site == 'NY':
-                colors.append('#2196F3')  # Blue
-            elif site == 'VT':
-                colors.append('#4CAF50')  # Green
-            else:
-                colors.append('#9E9E9E')  # Gray
-        
-        fig = go.Figure()
-        
-        fig.add_trace(go.Bar(
-            x=chart_data['Site'],
-            y=chart_data['Cost_Per_Tap'],
-            marker_color=colors,
-            text=chart_data['Cost_Per_Tap'].apply(lambda x: f"${x:.2f}"),
-            textposition='outside'
-        ))
-        
-        # Add company average line
-        fig.add_hline(
-            y=avg_cost_per_tap,
-            line_dash="dash",
-            line_color="gray",
-            annotation_text=f"Company Avg: ${avg_cost_per_tap:.2f}",
-            annotation_position="right"
-        )
-        
-        fig.update_layout(
-            yaxis_title="Cost Per Tap ($)",
-            xaxis_title="Site",
-            height=300,
-            showlegend=False
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.caption("💡 Lower cost per tap indicates higher efficiency at that site")
 
     st.divider()
 
@@ -321,133 +250,190 @@ def render(personnel_df, vacuum_df):
     st.divider()
 
     # ========================================================================
-    # EMPLOYEE PRODUCTIVITY
+    # EMPLOYEE PRODUCTIVITY - WITH JOB TYPE BREAKDOWN
     # ========================================================================
 
-    st.subheader("👥 Employee Productivity Rankings")
+    st.subheader("👥 Employee Productivity")
+    
+    st.markdown("**Minutes per tap by job type:**")
+    st.caption("Shows time efficiency for tapping and repair work")
 
-    # Aggregate by employee
-    emp_stats = filtered_df.groupby('Employee').agg({
-        'Taps_In': 'sum',
-        'Taps_Out': 'sum',
-        'Taps_Capped': 'sum',
-        'Net_Taps': 'sum',
+    # Calculate minutes per tap by job type for each employee
+    emp_job_stats = filtered_df.groupby(['Employee', 'Job_Code']).agg({
         'Hours': 'sum',
-        'Labor_Cost': 'sum',
-        'Repairs': 'sum'
+        'Taps_In': 'sum'
     }).reset_index()
-
-    # Calculate productivity metrics
-    emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
-    emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
-
-    emp_stats['Minutes_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
-    emp_stats['Minutes_Per_Tap'] = emp_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-
-    emp_stats['Cost_Per_Tap'] = (emp_stats['Labor_Cost'] / emp_stats['Taps_In']).round(2)
-    emp_stats['Cost_Per_Tap'] = emp_stats['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-
-    # Add site information
-    if has_site:
-        emp_sites = filtered_df.groupby('Employee')['Site'].apply(
-            lambda x: ', '.join(sorted(x.unique()))
+    
+    # Calculate minutes per tap
+    emp_job_stats['Minutes_Per_Tap'] = ((emp_job_stats['Hours'] * 60) / emp_job_stats['Taps_In']).round(1)
+    emp_job_stats['Minutes_Per_Tap'] = emp_job_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+    
+    # Filter to relevant job codes
+    job_codes_to_show = []
+    
+    # Find tapping job codes (case insensitive)
+    tapping_jobs = emp_job_stats[
+        emp_job_stats['Job_Code'].str.lower().str.contains('tap', na=False, case=False)
+    ]['Job_Code'].unique()
+    job_codes_to_show.extend(tapping_jobs)
+    
+    # Find repair job codes
+    repair_jobs = emp_job_stats[
+        emp_job_stats['Job_Code'].str.lower().str.contains('repair|tubing', na=False, case=False)
+    ]['Job_Code'].unique()
+    job_codes_to_show.extend(repair_jobs)
+    
+    if len(job_codes_to_show) > 0:
+        # Pivot to show job codes as columns
+        pivot = emp_job_stats[emp_job_stats['Job_Code'].isin(job_codes_to_show)].pivot(
+            index='Employee',
+            columns='Job_Code',
+            values='Minutes_Per_Tap'
         ).reset_index()
-        emp_sites.columns = ['Employee', 'Sites_Worked']
-        emp_stats = emp_stats.merge(emp_sites, on='Employee', how='left')
-
-    # Sort by taps installed
-    emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
-
-    # Display ranking
-    display = emp_stats.copy()
-    display = display[display['Taps_In'] > 0]  # Only show employees who installed taps
-
-    if not display.empty:
-        display.insert(0, 'Rank', range(1, len(display) + 1))
-
-        # Add efficiency indicator
-        median_cost = display['Cost_Per_Tap'].median()
-        display['Efficiency'] = display['Cost_Per_Tap'].apply(
-            lambda x: '🟢 Low Cost' if x < median_cost else ('🟡 Average' if x == median_cost else '🔴 High Cost')
-        )
-
-        # Format for display
-        if 'Sites_Worked' in display.columns:
-            display_cols = ['Rank', 'Employee', 'Sites_Worked', 'Taps_In', 'Hours', 'Taps_Per_Hour',
-                            'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost', 'Efficiency']
-            col_names = ['#', 'Employee', 'Sites', 'Taps', 'Hours', 'Taps/Hr',
-                         'Min/Tap', '$/Tap', 'Total $', '⚫']
+        
+        # Add total taps and hours
+        emp_totals = filtered_df.groupby('Employee').agg({
+            'Taps_In': 'sum',
+            'Hours': 'sum',
+            'Labor_Cost': 'sum'
+        }).reset_index()
+        
+        # Merge
+        productivity = pivot.merge(emp_totals, on='Employee', how='left')
+        
+        # Calculate overall metrics
+        productivity['Overall_Taps_Per_Hour'] = (productivity['Taps_In'] / productivity['Hours']).round(1)
+        productivity['Overall_Taps_Per_Hour'] = productivity['Overall_Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
+        
+        productivity['Cost_Per_Tap'] = (productivity['Labor_Cost'] / productivity['Taps_In']).round(2)
+        productivity['Cost_Per_Tap'] = productivity['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+        
+        # Sort by total taps
+        productivity = productivity.sort_values('Taps_In', ascending=False)
+        productivity = productivity[productivity['Taps_In'] > 0]
+        
+        if not productivity.empty:
+            # Build display columns
+            display_cols = ['Employee']
+            col_names = ['Employee']
+            
+            # Add job code columns
+            for job_code in job_codes_to_show:
+                if job_code in productivity.columns:
+                    display_cols.append(job_code)
+                    # Shorten job code name if too long
+                    short_name = job_code[:20] + '...' if len(job_code) > 20 else job_code
+                    col_names.append(f"Min/Tap: {short_name}")
+            
+            # Add totals
+            display_cols.extend(['Taps_In', 'Hours', 'Overall_Taps_Per_Hour', 'Cost_Per_Tap', 'Labor_Cost'])
+            col_names.extend(['Total Taps', 'Hours', 'Overall Taps/Hr', '$/Tap', 'Total Cost'])
+            
+            display = productivity[display_cols].copy()
+            display.columns = col_names
+            
+            # Format currency
+            if '$/Tap' in display.columns:
+                display['$/Tap'] = display['$/Tap'].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "N/A")
+            if 'Total Cost' in display.columns:
+                display['Total Cost'] = display['Total Cost'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
+            
+            st.dataframe(display, use_container_width=True, hide_index=True, height=400)
+            
+            # Summary stats
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Employees Tracked", len(productivity))
+            
+            with col2:
+                avg_taps_hr = productivity['Overall Taps/Hr'].mean()
+                st.metric("Avg Taps/Hour", f"{avg_taps_hr:.1f}")
+            
+            with col3:
+                # Get average for first job code shown
+                if len(job_codes_to_show) > 0 and job_codes_to_show[0] in productivity.columns:
+                    avg_mins = productivity[job_codes_to_show[0]].mean()
+                    st.metric(f"Avg Min/Tap ({job_codes_to_show[0][:15]})", f"{avg_mins:.1f}")
+            
+            with col4:
+                avg_cost = productivity['Cost_Per_Tap'].mean()
+                st.metric("Avg Cost/Tap", f"${avg_cost:.2f}")
         else:
-            display_cols = ['Rank', 'Employee', 'Taps_In', 'Hours', 'Taps_Per_Hour',
-                            'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost', 'Efficiency']
-            col_names = ['#', 'Employee', 'Taps', 'Hours', 'Taps/Hr',
-                         'Min/Tap', '$/Tap', 'Total $', '⚫']
-
-        display_table = display[display_cols].copy()
-        display_table.columns = col_names
-
-        # Format currency
-        display_table['$/Tap'] = display_table['$/Tap'].apply(lambda x: f"${x:.2f}")
-        display_table['Total $'] = display_table['Total $'].apply(lambda x: f"${x:,.2f}")
-
-        st.dataframe(display_table, use_container_width=True, hide_index=True, height=400)
-
-        # Summary stats
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.metric("Avg Taps/Hour", f"{display['Taps/Hr'].mean():.1f}")
-
-        with col2:
-            st.metric("Avg Minutes/Tap", f"{display['Min/Tap'].mean():.1f}")
-
-        with col3:
-            avg_cost = display_table['$/Tap'].str.replace('$', '').astype(float).mean()
-            st.metric("Avg Cost/Tap", f"${avg_cost:.2f}")
-
-        with col4:
-            most_efficient = display.loc[display['Cost_Per_Tap'].idxmin(), 'Employee']
-            st.metric("Most Efficient", most_efficient)
-
+            st.info("No productivity data for selected time range")
     else:
-        st.info("No tapping activity in selected time range")
+        # Fallback to simple view if no job codes found
+        st.info("Job code information not available - showing basic productivity metrics")
+        
+        # Aggregate by employee
+        emp_stats = filtered_df.groupby('Employee').agg({
+            'Taps_In': 'sum',
+            'Hours': 'sum',
+            'Labor_Cost': 'sum'
+        }).reset_index()
+        
+        # Calculate productivity metrics
+        emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
+        emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
+        
+        emp_stats['Minutes_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
+        emp_stats['Minutes_Per_Tap'] = emp_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+        
+        emp_stats['Cost_Per_Tap'] = (emp_stats['Labor_Cost'] / emp_stats['Taps_In']).round(2)
+        emp_stats['Cost_Per_Tap'] = emp_stats['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+        
+        emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
+        emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
+        
+        if not emp_stats.empty:
+            display = emp_stats[['Employee', 'Taps_In', 'Hours', 'Taps_Per_Hour', 'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost']].copy()
+            display.columns = ['Employee', 'Taps', 'Hours', 'Taps/Hr', 'Min/Tap', '$/Tap', 'Total Cost']
+            
+            display['$/Tap'] = display['$/Tap'].apply(lambda x: f"${x:.2f}")
+            display['Total Cost'] = display['Total Cost'].apply(lambda x: f"${x:,.2f}")
+            
+            st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
     st.divider()
 
-    # Tips with multi-site context
+    # Tips with updated context
     with st.expander("💡 Understanding Tapping Metrics"):
         st.markdown("""
+        **What's New:**
+        
+        - **Site-Wide Efficiency**: Renamed from "Company-Wide" to better reflect overall operation metrics
+        - **Minutes/Tap by Job Type**: Now shows time efficiency for different types of work:
+          - Tapping (new tap installation)
+          - Inseason Repairs (fixing issues during season)
+          - Already Identified Tubing Issues (known problem repairs)
+        - **Removed Site Breakdown**: Simplified view focuses on overall efficiency
+        
         **Key Metrics Explained:**
 
         - **Taps Installed**: New taps put into trees
         - **Taps Removed**: Old taps taken out
         - **Taps Capped**: Taps that were capped off (end of season or non-productive)
         - **Net Change**: Taps Installed - Taps Removed (overall system growth/shrinkage)
-        - **Taps Per Hour**: Productivity metric (higher = more efficient)
-        - **Minutes Per Tap**: Time efficiency (lower = faster work)
+        - **Minutes Per Tap**: Time efficiency by job type (lower = faster work)
+        - **Taps Per Hour**: Overall productivity metric (higher = more efficient)
         - **Cost Per Tap**: Labor cost efficiency (lower = more cost-effective)
-
-        **Multi-Site Features:**
-        - Compare efficiency between NY and VT operations
-        - Identify site-specific challenges affecting productivity
-        - Track which employees work at which sites
-        - Share best practices across locations
 
         **Good Productivity Rates:**
         - Beginner: 15-25 taps/hour (2.4-4 minutes/tap)
         - Experienced: 30-50 taps/hour (1.2-2 minutes/tap)
         - Expert: 50+ taps/hour (<1.2 minutes/tap)
+        
+        **Note:** Repair work typically takes longer per tap than new installations
 
-        **Cost Management:**
-        - Lower cost per tap = better efficiency
-        - Compare employees to find training opportunities
-        - Track cost trends to optimize crew assignments
-        - Consider terrain and site conditions when comparing
+        **Using Job Type Breakdown:**
+        - Compare tapping efficiency vs repair efficiency
+        - Identify employees who excel at specific tasks
+        - Plan crew assignments based on skill sets
+        - Track if repair times improve with experience
 
         **Tips for Analysis:**
         - Track improvement over season as crew gains experience
-        - Compare rates between employees for training opportunities
+        - Compare employees for training opportunities
         - Monitor cost per tap to control labor expenses
-        - Use site breakdown to identify location-specific challenges
-        - Share successful techniques between sites
+        - Different job types naturally have different time requirements
         """)
