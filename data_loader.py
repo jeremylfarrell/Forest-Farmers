@@ -289,17 +289,19 @@ def process_vacuum_data(df):
     
     # Process each timestamp column found
     for timestamp_col in timestamp_columns:
-        # Check if we have Excel serial dates (numeric values like 45991.06957)
-        if pd.api.types.is_numeric_dtype(df[timestamp_col]):
-            # Create a clean copy
-            values = df[timestamp_col].copy()
-            
+        # First, try to convert to numeric (handles both actual numbers and numeric strings)
+        numeric_attempt = pd.to_numeric(df[timestamp_col], errors='coerce')
+        
+        # Check if we got valid numeric values (Excel serial dates)
+        if numeric_attempt.notna().any():
+            # We have numeric values - treat as potential Excel serial dates
             # Filter out invalid values (negative, zero, or unreasonably large)
-            # Valid Excel dates are typically between 1 and 50000 (years 1900-2036)
-            values = values.apply(lambda x: x if (pd.notna(x) and 0 < x < 100000) else None)
+            # Valid Excel dates are typically between 1 and 100000 (years 1900-2173)
+            numeric_attempt = numeric_attempt.apply(
+                lambda x: x if (pd.notna(x) and 0 < x < 100000) else None
+            )
             
             # Convert Excel serial dates to datetime
-            # Method: Add days to Excel's epoch (1899-12-30)
             from datetime import datetime as dt, timedelta
             
             def excel_to_datetime(excel_date):
@@ -313,9 +315,9 @@ def process_vacuum_data(df):
                 except:
                     return pd.NaT
             
-            df[timestamp_col] = values.apply(excel_to_datetime)
+            df[timestamp_col] = numeric_attempt.apply(excel_to_datetime)
         else:
-            # Regular string dates
+            # Not numeric - try regular datetime parsing (for string dates)
             df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
     
     # Use the first valid timestamp column for primary Timestamp field
@@ -334,7 +336,7 @@ def process_vacuum_data(df):
         # No timestamp column found - create a default one with current time
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
-        
+
     
     # Convert vacuum reading to numeric
     vacuum_cols = [col for col in df.columns if 'vacuum' in col.lower() or 'reading' in col.lower()]
