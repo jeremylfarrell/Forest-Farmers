@@ -6,7 +6,7 @@ This is the main dashboard file that orchestrates all pages and data loading.
 All complex logic has been moved to separate modules for better maintainability.
 
 MULTI-SITE: Supports NY and VT operations with site selection on login
-UPDATED: Site selection screen after password, before dashboard
+UPDATED: Clean sidebar - removed filters, auto-loads 60 days
 """
 
 import streamlit as st
@@ -20,7 +20,7 @@ import config
 from data_loader import load_all_vacuum_data, load_all_personnel_data
 
 # Import utility functions
-from utils import filter_recent_sensors, find_column
+from utils import find_column
 
 # Import custom styling
 from styling import apply_custom_css
@@ -192,11 +192,11 @@ apply_custom_css()
 
 
 # ============================================================================
-# SIDEBAR
+# SIDEBAR - CLEAN & SIMPLE
 # ============================================================================
 
 def render_sidebar():
-    """Render the sidebar with navigation and filters"""
+    """Render the sidebar with navigation only"""
 
     with st.sidebar:
         st.title("🍁 Forest Farmers Dashboard")
@@ -238,37 +238,6 @@ def render_sidebar():
 
         st.divider()
 
-        # Data range filter
-        st.subheader("⏱️ Data Range")
-        days_to_load = st.selectbox(
-            "Show last:",
-            options=[7, 14, 30, 60, 90],
-            index=0,
-            format_func=lambda x: f"{x} days"
-        )
-
-        st.caption(
-            "💡 Leak Checking loads 30+ days for accurate analysis"
-        )
-
-        st.divider()
-
-        # Vacuum filters
-        st.subheader("🔧 Vacuum Filters")
-        only_recent_sensors = st.checkbox("Only recently active sensors", value=True)
-        if only_recent_sensors:
-            recent_threshold = st.slider(
-                "Active within:",
-                min_value=1,
-                max_value=7,
-                value=2,
-                format="%d days"
-            )
-        else:
-            recent_threshold = None
-
-        st.divider()
-
         # Actions
         if st.button("🔄 Refresh Data", use_container_width=True):
             # Clear all cached data
@@ -278,13 +247,17 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v6.0 Site Selection | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v7.0 Clean Sidebar | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption("📊 Loading last 60 days")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
     site_filter = st.session_state.get("selected_site", "All Sites")
     
-    return page, days_to_load, recent_threshold, site_filter
+    # Fixed settings (no user controls)
+    days_to_load = 60  # Always load 60 days
+    
+    return page, days_to_load, site_filter
 
 
 # ============================================================================
@@ -378,7 +351,7 @@ def filter_data_by_site(vacuum_df, personnel_df, site_filter):
     Args:
         vacuum_df: Vacuum data
         personnel_df: Personnel data
-        site_filter: Selected site ("All Sites", "NY", "VT", "UNK")
+        site_filter: Selected site ("All Sites", "NY", "VT")
 
     Returns:
         Tuple of (filtered_vacuum_df, filtered_personnel_df)
@@ -402,7 +375,7 @@ def main():
     """Main application entry point"""
 
     # Render sidebar and get selections
-    page, days_to_load, recent_threshold, site_filter = render_sidebar()
+    page, days_to_load, site_filter = render_sidebar()
 
     # Load data
     vacuum_df, personnel_df = load_data(days_to_load)
@@ -418,37 +391,17 @@ def main():
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"🟦 **New York View** - {sensor_count} sensors")
+            st.success(f"🟦 **New York View** - {sensor_count} sensors | Last 60 days")
     elif site_filter == "VT":
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"🟩 **Vermont View** - {sensor_count} sensors")
+            st.success(f"🟩 **Vermont View** - {sensor_count} sensors | Last 60 days")
     else:
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"📊 **All Sites View** - {sensor_count} sensors combined")
-
-    # Apply recent sensor filter if enabled
-    if recent_threshold is not None:
-        original_sensors = 0
-        if not vacuum_df.empty:
-            sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
-            if sensor_col:
-                original_sensors = vacuum_df[sensor_col].nunique()
-
-        vacuum_df = filter_recent_sensors(vacuum_df, recent_threshold)
-
-        if original_sensors > 0 and not vacuum_df.empty:
-            sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
-            if sensor_col:
-                filtered_sensors = vacuum_df[sensor_col].nunique()
-                if filtered_sensors < original_sensors:
-                    st.info(
-                        f"📊 Showing {filtered_sensors} sensors active in last {recent_threshold} days "
-                        f"(filtered out {original_sensors - filtered_sensors} inactive)"
-                    )
+            st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last 60 days")
 
     # Route to selected page
     if page == "🔧 Vacuum Performance":
