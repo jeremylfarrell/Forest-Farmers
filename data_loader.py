@@ -291,20 +291,29 @@ def process_vacuum_data(df):
     for timestamp_col in timestamp_columns:
         # Check if we have Excel serial dates (numeric values like 45991.06957)
         if pd.api.types.is_numeric_dtype(df[timestamp_col]):
+            # Create a clean copy
+            values = df[timestamp_col].copy()
+            
+            # Filter out invalid values (negative, zero, or unreasonably large)
+            # Valid Excel dates are typically between 1 and 50000 (years 1900-2036)
+            values = values.apply(lambda x: x if (pd.notna(x) and 0 < x < 100000) else None)
+            
             # Convert Excel serial dates to datetime
-            # Excel dates are days since 1899-12-30
-            # Filter out negative and invalid values first
-            df_col_copy = df[timestamp_col].copy()
+            # Method: Add days to Excel's epoch (1899-12-30)
+            from datetime import datetime as dt, timedelta
             
-            # Replace negative values and zeros with NaN (they're invalid dates)
-            df_col_copy = df_col_copy.apply(lambda x: x if (pd.notna(x) and x > 0) else pd.NA)
+            def excel_to_datetime(excel_date):
+                if pd.isna(excel_date):
+                    return pd.NaT
+                try:
+                    # Excel epoch is December 30, 1899
+                    epoch = dt(1899, 12, 30)
+                    # Add the number of days
+                    return epoch + timedelta(days=float(excel_date))
+                except:
+                    return pd.NaT
             
-            try:
-                # Convert valid Excel serial dates
-                df[timestamp_col] = pd.to_datetime(df_col_copy, unit='D', origin='1899-12-30', errors='coerce')
-            except Exception as e:
-                # Fallback to regular datetime conversion
-                df[timestamp_col] = pd.to_datetime(df_col_copy, errors='coerce')
+            df[timestamp_col] = values.apply(excel_to_datetime)
         else:
             # Regular string dates
             df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
@@ -325,9 +334,6 @@ def process_vacuum_data(df):
         # No timestamp column found - create a default one with current time
         df['Timestamp'] = pd.Timestamp.now()
         df['Date'] = datetime.now().date()
-
-    
-
 
     
     # Convert vacuum reading to numeric
