@@ -26,15 +26,16 @@ from utils import find_column
 from styling import apply_custom_css
 
 from page_modules import (
-    vacuum, 
-    employees, 
-    employee_effectiveness, 
-    raw_data, 
-    sensor_map, 
-    sap_forecast, 
-    maintenance, 
-    tapping, 
-    data_quality
+    vacuum,
+    employees,
+    employee_effectiveness,
+    raw_data,
+    sensor_map,
+    sap_forecast,
+    maintenance,
+    tapping,
+    data_quality,
+    repairs_analysis
 )
 
 # ============================================================================
@@ -228,6 +229,7 @@ def render_sidebar():
                 "👥 Employee Performance",
                 "⭐ Leak Checking",
                 "🔧 Maintenance & Leaks",
+                "🛠️ Repairs Analysis",
                 "⚠️ Alerts",
                 "🌍 Interactive Map",
                 "🌡️ Sap Flow Forecast",
@@ -414,6 +416,8 @@ def main():
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
+    elif page == "🛠️ Repairs Analysis":
+        repairs_analysis.render(personnel_df, vacuum_df)
     elif page == "⚠️ Alerts":
         data_quality.render(personnel_df, vacuum_df)
     elif page == "🌍 Interactive Map":
