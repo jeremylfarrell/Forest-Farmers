@@ -318,6 +318,7 @@ def render(personnel_df, vacuum_df):
             col_names = ['Employee']
             
             # Add job code columns - use short names since "Minutes per tap" is in header above
+            used_names = set()
             for job_code in job_codes_to_show:
                 if job_code in productivity.columns:
                     display_cols.append(job_code)
@@ -329,6 +330,14 @@ def render(personnel_df, vacuum_df):
                         # Remove common prefixes
                         short_name = job_code.replace('Maple Tapping', '').replace('Maple tapping', '').strip(' -:')
                         short_name = short_name if short_name else job_code[:15]
+
+                    # Handle duplicates by adding a number suffix
+                    base_name = short_name
+                    counter = 2
+                    while short_name in used_names:
+                        short_name = f"{base_name} ({counter})"
+                        counter += 1
+                    used_names.add(short_name)
                     col_names.append(short_name)
             
             # Add totals
