@@ -1,7 +1,7 @@
 """
 Interactive Map Page Module - MULTI-SITE POLISHED
 Geographic visualization of sensor locations with performance overlay
-Now with site color coding and legend
+Now with site color coding, legend, and tap count display
 """
 
 import streamlit as st
@@ -10,6 +10,84 @@ import folium
 from streamlit_folium import st_folium
 import config
 from utils import find_column, get_vacuum_column
+import re
+
+
+def match_mainline_to_sensor(mainline, sensor_names):
+    """
+    Match a mainline name to the closest sensor name
+    Uses fuzzy matching based on common patterns
+
+    Args:
+        mainline: Mainline name from personnel data (e.g., "RHAS13")
+        sensor_names: List of sensor names from vacuum data
+
+    Returns:
+        Best matching sensor name or None
+    """
+    if pd.isna(mainline) or not mainline:
+        return None
+
+    mainline = str(mainline).strip().upper()
+
+    # Try exact match first
+    for sensor in sensor_names:
+        if str(sensor).strip().upper() == mainline:
+            return sensor
+
+    # Try partial match - mainline contained in sensor name
+    for sensor in sensor_names:
+        sensor_upper = str(sensor).strip().upper()
+        if mainline in sensor_upper or sensor_upper in mainline:
+            return sensor
+
+    # Try matching without numbers (e.g., "RHAS" matches "RHAS13")
+    mainline_alpha = re.sub(r'\d+', '', mainline)
+    for sensor in sensor_names:
+        sensor_alpha = re.sub(r'\d+', '', str(sensor).upper())
+        if mainline_alpha and sensor_alpha and mainline_alpha == sensor_alpha:
+            return sensor
+
+    return None
+
+
+def get_taps_by_mainline(personnel_df):
+    """
+    Calculate total taps installed per mainline from personnel data
+
+    Args:
+        personnel_df: Personnel DataFrame with mainline and Taps Put In columns
+
+    Returns:
+        Dictionary mapping mainline names to tap counts
+    """
+    if personnel_df.empty:
+        return {}
+
+    # Find mainline column
+    mainline_col = None
+    for col in personnel_df.columns:
+        if 'mainline' in col.lower():
+            mainline_col = col
+            break
+
+    if not mainline_col:
+        return {}
+
+    # Find taps column
+    taps_col = None
+    for col in personnel_df.columns:
+        if 'taps put in' in col.lower() or col == 'Taps Put In':
+            taps_col = col
+            break
+
+    if not taps_col:
+        return {}
+
+    # Group by mainline and sum taps
+    taps_by_mainline = personnel_df.groupby(mainline_col)[taps_col].sum().to_dict()
+
+    return taps_by_mainline
 
 
 def render(vacuum_df, personnel_df):
@@ -90,6 +168,21 @@ def render(vacuum_df, personnel_df):
     if map_data.empty:
         st.warning("No sensors with valid coordinates found")
         return
+
+    # Get tap counts from personnel data and match to sensors
+    taps_by_mainline = get_taps_by_mainline(personnel_df)
+    sensor_names = map_data['Sensor'].tolist()
+
+    # Create a mapping of sensor name to tap count
+    sensor_tap_counts = {}
+    for mainline, tap_count in taps_by_mainline.items():
+        matched_sensor = match_mainline_to_sensor(mainline, sensor_names)
+        if matched_sensor:
+            # Accumulate taps if multiple mainlines match same sensor
+            sensor_tap_counts[matched_sensor] = sensor_tap_counts.get(matched_sensor, 0) + tap_count
+
+    # Add tap counts to map_data
+    map_data['Taps'] = map_data['Sensor'].map(sensor_tap_counts).fillna(0).astype(int)
 
     # Map controls
     col1, col2, col3 = st.columns(3)
@@ -193,20 +286,26 @@ def render(vacuum_df, personnel_df):
             color = 'blue'
             status = "Sensor"
 
+        # Get tap count for this sensor
+        tap_count = row.get('Taps', 0)
+
         # Create popup
         popup_html = f"""
         <div style="font-family: Arial; min-width: 200px;">
             <h4 style="margin: 0 0 10px 0;">{row['Sensor']}</h4>
         """
-        
+
         if has_site and 'Site' in row:
             site_emoji = "🟦" if row['Site'] == "NY" else "🟩" if row['Site'] == "VT" else "⚫"
             popup_html += f"<p style='margin: 5px 0;'><b>Site:</b> {site_emoji} {row['Site']}</p>"
-        
+
         if vacuum_col and 'Vacuum' in row and pd.notna(row['Vacuum']):
             popup_html += f"<p style='margin: 5px 0;'><b>Vacuum:</b> {row['Vacuum']:.1f}\"</p>"
             popup_html += f"<p style='margin: 5px 0;'><b>Status:</b> {status}</p>"
-        
+
+        if tap_count > 0:
+            popup_html += f"<p style='margin: 5px 0;'><b>Taps Installed:</b> {int(tap_count):,}</p>"
+
         popup_html += f"""
             <p style='margin: 5px 0; font-size: 11px; color: gray;'>
                 Lat: {row['Latitude']:.6f}, Lon: {row['Longitude']:.6f}
@@ -214,16 +313,42 @@ def render(vacuum_df, personnel_df):
         </div>
         """
 
+        # Add smaller vacuum circle marker
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
-            radius=marker_size,
+            radius=max(3, marker_size - 3),  # Smaller radius
             popup=folium.Popup(popup_html, max_width=300),
             color=color,
             fill=True,
             fillColor=color,
             fillOpacity=0.7,
-            weight=2
+            weight=1
         ).add_to(m)
+
+        # Add small black dot with tap count if there are taps
+        if tap_count > 0:
+            # Create a small black label showing tap count
+            folium.Marker(
+                location=[row['Latitude'], row['Longitude']],
+                icon=folium.DivIcon(
+                    html=f'''<div style="
+                        background-color: black;
+                        color: white;
+                        border-radius: 50%;
+                        width: 18px;
+                        height: 18px;
+                        font-size: 9px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        border: 1px solid white;
+                        transform: translate(-9px, -9px);
+                    ">{int(tap_count) if tap_count < 1000 else f"{tap_count/1000:.0f}k"}</div>''',
+                    icon_size=(18, 18),
+                    icon_anchor=(0, 0)
+                )
+            ).add_to(m)
 
     # Display map
     st_folium(m, width=None, height=600)
