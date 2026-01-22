@@ -221,22 +221,55 @@ def render_sidebar():
 
         # Page selection - PRIMARY NAVIGATION
         st.subheader("📄 Pages")
+
+        # Main pages
         page = st.radio(
             "Select Page",
             [
-                "🔧 Vacuum Performance",
                 "🌳 Tapping Operations",
                 "👥 Employee Performance",
+                "🛠️ Repairs Analysis",
+                "🌍 Interactive Map"
+            ],
+            label_visibility="collapsed",
+            key="main_pages"
+        )
+
+        st.markdown("---")
+        st.caption("⚠️ **Needs Work**")
+
+        # Secondary pages that need work
+        page2 = st.radio(
+            "Other Pages",
+            [
+                "🔧 Vacuum Performance",
                 "⭐ Leak Checking",
                 "🔧 Maintenance & Leaks",
-                "🛠️ Repairs Analysis",
                 "⚠️ Alerts",
-                "🌍 Interactive Map",
                 "🌡️ Sap Flow Forecast",
                 "📊 Raw Data"
             ],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="other_pages"
         )
+
+        # Handle page selection from either radio group
+        if "last_main_page" not in st.session_state:
+            st.session_state.last_main_page = page
+        if "last_other_page" not in st.session_state:
+            st.session_state.last_other_page = page2
+
+        # Determine which page changed
+        if page != st.session_state.last_main_page:
+            st.session_state.last_main_page = page
+            st.session_state.active_page = page
+        elif page2 != st.session_state.last_other_page:
+            st.session_state.last_other_page = page2
+            st.session_state.active_page = page2
+        elif "active_page" not in st.session_state:
+            st.session_state.active_page = page
+
+        page = st.session_state.active_page
 
         st.divider()
 
