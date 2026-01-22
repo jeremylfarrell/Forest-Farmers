@@ -51,15 +51,17 @@ def match_mainline_to_sensor(mainline, sensor_names):
     return None
 
 
-def get_taps_by_mainline(personnel_df):
+def get_taps_details_by_mainline(personnel_df):
     """
-    Calculate total taps installed per mainline from personnel data
+    Get detailed tap installation info per mainline from personnel data
 
     Args:
-        personnel_df: Personnel DataFrame with mainline and Taps Put In columns
+        personnel_df: Personnel DataFrame with mainline, Taps Put In, Date, Employee columns
 
     Returns:
-        Dictionary mapping mainline names to tap counts
+        Dictionary mapping mainline names to dict with:
+        - total_taps: total count
+        - installations: list of {date, employee, taps} dicts
     """
     if personnel_df.empty:
         return {}
@@ -84,10 +86,50 @@ def get_taps_by_mainline(personnel_df):
     if not taps_col:
         return {}
 
-    # Group by mainline and sum taps
-    taps_by_mainline = personnel_df.groupby(mainline_col)[taps_col].sum().to_dict()
+    # Find employee column
+    emp_col = None
+    for col in ['Employee Name', 'Employee', 'EE First', 'Name']:
+        if col in personnel_df.columns:
+            emp_col = col
+            break
 
-    return taps_by_mainline
+    # Find date column
+    date_col = 'Date' if 'Date' in personnel_df.columns else None
+
+    # Build detailed info per mainline
+    taps_details = {}
+
+    for mainline in personnel_df[mainline_col].unique():
+        if pd.isna(mainline) or not str(mainline).strip():
+            continue
+
+        mainline_data = personnel_df[personnel_df[mainline_col] == mainline]
+        mainline_data = mainline_data[mainline_data[taps_col] > 0]  # Only rows with taps
+
+        if mainline_data.empty:
+            continue
+
+        installations = []
+        for _, row in mainline_data.iterrows():
+            install = {
+                'taps': int(row[taps_col]) if pd.notna(row[taps_col]) else 0
+            }
+            if date_col and pd.notna(row.get(date_col)):
+                install['date'] = row[date_col]
+            if emp_col and pd.notna(row.get(emp_col)):
+                install['employee'] = row[emp_col]
+            if install['taps'] > 0:
+                installations.append(install)
+
+        if installations:
+            taps_details[mainline] = {
+                'total_taps': sum(i['taps'] for i in installations),
+                'installations': sorted(installations,
+                    key=lambda x: x.get('date', pd.Timestamp.min) if pd.notna(x.get('date')) else pd.Timestamp.min,
+                    reverse=True)[:10]  # Keep last 10 installations for popup
+            }
+
+    return taps_details
 
 
 def render(vacuum_df, personnel_df):
@@ -169,20 +211,34 @@ def render(vacuum_df, personnel_df):
         st.warning("No sensors with valid coordinates found")
         return
 
-    # Get tap counts from personnel data and match to sensors
-    taps_by_mainline = get_taps_by_mainline(personnel_df)
+    # Get detailed tap info from personnel data and match to sensors
+    taps_details = get_taps_details_by_mainline(personnel_df)
     sensor_names = map_data['Sensor'].tolist()
 
-    # Create a mapping of sensor name to tap count
-    sensor_tap_counts = {}
-    for mainline, tap_count in taps_by_mainline.items():
+    # Create mappings: sensor -> tap details, and track unmapped mainlines
+    sensor_tap_info = {}  # sensor -> {total_taps, installations}
+    unmapped_mainlines = {}  # mainline -> {total_taps, installations}
+
+    for mainline, details in taps_details.items():
         matched_sensor = match_mainline_to_sensor(mainline, sensor_names)
         if matched_sensor:
-            # Accumulate taps if multiple mainlines match same sensor
-            sensor_tap_counts[matched_sensor] = sensor_tap_counts.get(matched_sensor, 0) + tap_count
+            # Merge with existing if multiple mainlines match same sensor
+            if matched_sensor in sensor_tap_info:
+                sensor_tap_info[matched_sensor]['total_taps'] += details['total_taps']
+                sensor_tap_info[matched_sensor]['installations'].extend(details['installations'])
+            else:
+                sensor_tap_info[matched_sensor] = {
+                    'total_taps': details['total_taps'],
+                    'installations': details['installations'].copy()
+                }
+        else:
+            # Track unmapped mainlines
+            unmapped_mainlines[mainline] = details
 
     # Add tap counts to map_data
-    map_data['Taps'] = map_data['Sensor'].map(sensor_tap_counts).fillna(0).astype(int)
+    map_data['Taps'] = map_data['Sensor'].apply(
+        lambda s: sensor_tap_info.get(s, {}).get('total_taps', 0)
+    ).fillna(0).astype(int)
 
     # Map controls
     col1, col2, col3 = st.columns(3)
@@ -286,12 +342,14 @@ def render(vacuum_df, personnel_df):
             color = 'blue'
             status = "Sensor"
 
-        # Get tap count for this sensor
+        # Get tap info for this sensor
         tap_count = row.get('Taps', 0)
+        tap_info = sensor_tap_info.get(row['Sensor'], {})
+        installations = tap_info.get('installations', [])
 
         # Create popup
         popup_html = f"""
-        <div style="font-family: Arial; min-width: 200px;">
+        <div style="font-family: Arial; min-width: 250px; max-width: 350px;">
             <h4 style="margin: 0 0 10px 0;">{row['Sensor']}</h4>
         """
 
@@ -304,11 +362,33 @@ def render(vacuum_df, personnel_df):
             popup_html += f"<p style='margin: 5px 0;'><b>Status:</b> {status}</p>"
 
         if tap_count > 0:
-            popup_html += f"<p style='margin: 5px 0;'><b>Taps Installed:</b> {int(tap_count):,}</p>"
+            popup_html += f"<p style='margin: 5px 0;'><b>Total Taps Installed:</b> {int(tap_count):,}</p>"
+
+            # Add installation history
+            if installations:
+                popup_html += "<div style='margin-top: 10px; border-top: 1px solid #ddd; padding-top: 8px;'>"
+                popup_html += "<p style='margin: 0 0 5px 0; font-weight: bold; font-size: 12px;'>Recent Installations:</p>"
+                popup_html += "<table style='font-size: 11px; width: 100%; border-collapse: collapse;'>"
+
+                for install in installations[:5]:  # Show last 5
+                    date_str = ""
+                    if 'date' in install and pd.notna(install['date']):
+                        try:
+                            date_str = pd.to_datetime(install['date']).strftime('%m/%d/%y')
+                        except:
+                            date_str = str(install['date'])[:10]
+
+                    emp_str = install.get('employee', 'Unknown')
+                    if isinstance(emp_str, str) and len(emp_str) > 15:
+                        emp_str = emp_str[:15] + "..."
+
+                    popup_html += f"<tr><td style='padding: 2px;'>{date_str}</td><td style='padding: 2px;'>{emp_str}</td><td style='padding: 2px; text-align: right;'>{install['taps']}</td></tr>"
+
+                popup_html += "</table></div>"
 
         popup_html += f"""
-            <p style='margin: 5px 0; font-size: 11px; color: gray;'>
-                Lat: {row['Latitude']:.6f}, Lon: {row['Longitude']:.6f}
+            <p style='margin: 8px 0 0 0; font-size: 10px; color: gray;'>
+                {row['Latitude']:.5f}, {row['Longitude']:.5f}
             </p>
         </div>
         """
@@ -325,27 +405,30 @@ def render(vacuum_df, personnel_df):
             weight=1
         ).add_to(m)
 
-        # Add small black dot with tap count if there are taps
-        if tap_count > 0:
-            # Create a small black label showing tap count
+        # Add small black label with tap count (only for counts >= 20 to reduce clutter)
+        if tap_count >= 20:
+            # Format the tap count
+            if tap_count >= 1000:
+                tap_label = f"{tap_count/1000:.1f}k"
+            else:
+                tap_label = str(int(tap_count))
+
+            # Create a small black label offset to upper-right of marker
             folium.Marker(
                 location=[row['Latitude'], row['Longitude']],
                 icon=folium.DivIcon(
                     html=f'''<div style="
-                        background-color: black;
+                        background-color: rgba(0,0,0,0.85);
                         color: white;
-                        border-radius: 50%;
-                        width: 18px;
-                        height: 18px;
-                        font-size: 9px;
+                        border-radius: 3px;
+                        padding: 1px 4px;
+                        font-size: 10px;
                         font-weight: bold;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        border: 1px solid white;
-                        transform: translate(-9px, -9px);
-                    ">{int(tap_count) if tap_count < 1000 else f"{tap_count/1000:.0f}k"}</div>''',
-                    icon_size=(18, 18),
+                        white-space: nowrap;
+                        transform: translate(8px, -20px);
+                        box-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                    ">{tap_label}</div>''',
+                    icon_size=(30, 15),
                     icon_anchor=(0, 0)
                 )
             ).add_to(m)
@@ -397,6 +480,44 @@ def render(vacuum_df, personnel_df):
                 st.metric(f"{emoji} {row['Site']}", f"{int(row['Count'])} sensors")
                 if 'Avg_Vacuum' in row:
                     st.caption(f"Avg: {row['Avg_Vacuum']:.1f}\"")
+
+    # Unmapped taps section
+    if unmapped_mainlines:
+        st.divider()
+        total_unmapped_taps = sum(d['total_taps'] for d in unmapped_mainlines.values())
+
+        with st.expander(f"⚠️ Unmapped Taps ({total_unmapped_taps:,} taps from {len(unmapped_mainlines)} mainlines)", expanded=False):
+            st.markdown("""
+            These mainlines from personnel data couldn't be matched to any vacuum sensor on the map.
+            This could mean the mainline name doesn't match any sensor name, or the sensor isn't in the vacuum data.
+            """)
+
+            # Create a table of unmapped mainlines
+            unmapped_data = []
+            for mainline, details in sorted(unmapped_mainlines.items(), key=lambda x: x[1]['total_taps'], reverse=True):
+                # Get most recent installation info
+                recent = details['installations'][0] if details['installations'] else {}
+                last_date = ""
+                last_emp = ""
+                if 'date' in recent and pd.notna(recent['date']):
+                    try:
+                        last_date = pd.to_datetime(recent['date']).strftime('%m/%d/%y')
+                    except:
+                        last_date = str(recent['date'])[:10]
+                if 'employee' in recent:
+                    last_emp = recent['employee']
+
+                unmapped_data.append({
+                    'Mainline': mainline,
+                    'Total Taps': details['total_taps'],
+                    'Last Install': last_date,
+                    'By': last_emp
+                })
+
+            unmapped_df = pd.DataFrame(unmapped_data)
+            st.dataframe(unmapped_df, use_container_width=True, hide_index=True)
+
+            st.info("💡 To fix: Check if mainline names match sensor names in the vacuum data, or add these sensors to the map.")
 
     st.divider()
 
