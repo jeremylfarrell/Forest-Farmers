@@ -269,14 +269,7 @@ def render(vacuum_df, personnel_df):
             help="Size of markers on map"
         )
 
-    # Tapping overlay controls
-    st.markdown("**Tapping Overlay:**")
-    tap_col1, tap_col2 = st.columns([1, 2])
-
-    with tap_col1:
-        show_taps = st.checkbox("Show tap counts", value=True, help="Display tap installation counts on map")
-
-    # Collect all dates and employees from installations
+    # Collect all dates and employees from installations first
     all_employees = set()
     all_dates = []
     for details in list(sensor_tap_info.values()) + list(unmapped_mainlines.values()):
@@ -289,34 +282,41 @@ def render(vacuum_df, personnel_df):
                 except:
                     pass
 
+    # Tapping overlay controls - all in one row
+    st.markdown("**Tapping Overlay:**")
+    tap_col1, tap_col2, tap_col3 = st.columns([1, 2, 3])
+
+    with tap_col1:
+        show_taps = st.checkbox("Show taps", value=True, help="Display tap installation counts on map")
+
     with tap_col2:
         if all_employees:
             employee_filter = st.multiselect(
-                "Filter by employee",
+                "Employee",
                 options=sorted(all_employees),
                 default=[],
-                help="Show only taps installed by selected employees (leave empty for all)"
+                placeholder="All employees",
+                help="Filter by employee"
             )
         else:
             employee_filter = []
 
     # Date range slider
     date_filter = None
-    if all_dates:
-        min_date = min(all_dates)
-        max_date = max(all_dates)
+    with tap_col3:
+        if all_dates:
+            min_date = min(all_dates)
+            max_date = max(all_dates)
 
-        if min_date < max_date:
-            from datetime import timedelta
-            st.markdown("**Installation Date Range:**")
-            date_filter = st.slider(
-                "Filter by installation date",
-                min_value=min_date,
-                max_value=max_date,
-                value=(min_date, max_date),
-                format="MM/DD/YY",
-                help="Show only taps installed within this date range"
-            )
+            if min_date < max_date:
+                date_filter = st.slider(
+                    "Date range",
+                    min_value=min_date,
+                    max_value=max_date,
+                    value=(min_date, max_date),
+                    format="MM/DD",
+                    help="Filter by installation date"
+                )
 
     # Helper function to filter installations
     def filter_installations(installs, emp_filter, date_range):
