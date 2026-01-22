@@ -258,36 +258,60 @@ def render(personnel_df, vacuum_df):
     st.markdown("**Minutes per tap by job type:**")
     st.caption("Shows time efficiency for tapping and repair work")
 
-    # Calculate minutes per tap by job type for each employee
-    emp_job_stats = filtered_df.groupby(['Employee', 'Job_Code']).agg({
+    # Normalize job codes to combine similar ones
+    def normalize_job_code(job_code):
+        """Extract the key part of job code, removing NY/VT numbers and normalizing case"""
+        import re
+        if pd.isna(job_code):
+            return job_code
+        name = str(job_code)
+        # Remove state codes and numbers like "NY 240114", "- NY - 240114", "VT 240113"
+        name = re.sub(r'\s*-?\s*(NY|VT|ny|vt)\s*-?\s*\d+', '', name)
+        # Extract text in parentheses if present, otherwise use cleaned name
+        if '(' in name and ')' in name:
+            paren_text = name[name.find('(')+1:name.find(')')]
+            return paren_text.strip().lower()
+        # Remove "Maple Tapping" prefix variations
+        name = re.sub(r'^Maple\s*[Tt]apping\s*-?\s*', '', name)
+        return name.strip().lower() if name.strip() else job_code.lower()
+
+    # Create normalized job code column
+    filtered_df = filtered_df.copy()
+    filtered_df['Job_Code_Normalized'] = filtered_df['Job_Code'].apply(normalize_job_code)
+
+    # Calculate minutes per tap by NORMALIZED job type for each employee
+    emp_job_stats = filtered_df.groupby(['Employee', 'Job_Code_Normalized']).agg({
         'Hours': 'sum',
         'Taps_In': 'sum'
     }).reset_index()
-    
+
     # Calculate minutes per tap
     emp_job_stats['Minutes_Per_Tap'] = ((emp_job_stats['Hours'] * 60) / emp_job_stats['Taps_In']).round(1)
     emp_job_stats['Minutes_Per_Tap'] = emp_job_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-    
+
     # Filter to relevant job codes
     job_codes_to_show = []
-    
+
     # Find tapping job codes (case insensitive)
     tapping_jobs = emp_job_stats[
-        emp_job_stats['Job_Code'].str.lower().str.contains('tap', na=False, case=False)
-    ]['Job_Code'].unique()
+        emp_job_stats['Job_Code_Normalized'].str.lower().str.contains('tap|spout|install', na=False, case=False)
+    ]['Job_Code_Normalized'].unique()
     job_codes_to_show.extend(tapping_jobs)
-    
+
     # Find repair job codes
     repair_jobs = emp_job_stats[
-        emp_job_stats['Job_Code'].str.lower().str.contains('repair|tubing', na=False, case=False)
-    ]['Job_Code'].unique()
+        emp_job_stats['Job_Code_Normalized'].str.lower().str.contains('repair|tubing|fixing', na=False, case=False)
+    ]['Job_Code_Normalized'].unique()
     job_codes_to_show.extend(repair_jobs)
     
+    # Remove duplicates from job_codes_to_show
+    job_codes_to_show = list(dict.fromkeys(job_codes_to_show))
+
     if len(job_codes_to_show) > 0:
-        # Pivot to show job codes as columns
-        pivot = emp_job_stats[emp_job_stats['Job_Code'].isin(job_codes_to_show)].pivot(
+        # Pivot to show job codes as columns (using normalized names)
+        pivot = emp_job_stats[emp_job_stats['Job_Code_Normalized'].isin(job_codes_to_show)].pivot(
             index='Employee',
-            columns='Job_Code',
+            columns='Job_Code_Normalized',
             values='Minutes_Per_Tap'
         ).reset_index()
         
@@ -317,28 +341,13 @@ def render(personnel_df, vacuum_df):
             display_cols = ['Employee']
             col_names = ['Employee']
             
-            # Add job code columns - use short names since "Minutes per tap" is in header above
-            used_names = set()
+            # Add job code columns - names are already normalized
             for job_code in job_codes_to_show:
                 if job_code in productivity.columns:
                     display_cols.append(job_code)
-                    # Extract just the distinguishing part
-                    if '(' in job_code and ')' in job_code:
-                        # Get text inside parentheses only
-                        short_name = job_code[job_code.find('(')+1:job_code.find(')')]
-                    else:
-                        # Remove common prefixes
-                        short_name = job_code.replace('Maple Tapping', '').replace('Maple tapping', '').strip(' -:')
-                        short_name = short_name if short_name else job_code[:15]
-
-                    # Handle duplicates by adding a number suffix
-                    base_name = short_name
-                    counter = 2
-                    while short_name in used_names:
-                        short_name = f"{base_name} ({counter})"
-                        counter += 1
-                    used_names.add(short_name)
-                    col_names.append(short_name)
+                    # Capitalize for display
+                    display_name = job_code.title() if job_code else job_code
+                    col_names.append(display_name)
             
             # Add totals
             display_cols.extend(['Taps_In', 'Hours', 'Overall_Taps_Per_Hour', 'Cost_Per_Tap', 'Labor_Cost'])
