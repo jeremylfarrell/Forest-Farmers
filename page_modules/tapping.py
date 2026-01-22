@@ -347,7 +347,7 @@ def render(personnel_df, vacuum_df):
                 st.metric("Employees Tracked", len(productivity))
             
             with col2:
-                avg_taps_hr = productivity['Overall Taps/Hr'].mean()
+                avg_taps_hr = productivity['Overall_Taps_Per_Hour'].mean()
                 st.metric("Avg Taps/Hour", f"{avg_taps_hr:.1f}")
             
             with col3:
