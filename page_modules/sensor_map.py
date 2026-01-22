@@ -276,16 +276,18 @@ def render(vacuum_df, personnel_df):
     with tap_col1:
         show_taps = st.checkbox("Show tap counts", value=True, help="Display tap installation counts on map")
 
-    # Get list of employees who have installed taps
+    # Collect all dates and employees from installations
     all_employees = set()
-    for details in sensor_tap_info.values():
+    all_dates = []
+    for details in list(sensor_tap_info.values()) + list(unmapped_mainlines.values()):
         for install in details.get('installations', []):
             if 'employee' in install and install['employee']:
                 all_employees.add(install['employee'])
-    for details in unmapped_mainlines.values():
-        for install in details.get('installations', []):
-            if 'employee' in install and install['employee']:
-                all_employees.add(install['employee'])
+            if 'date' in install and pd.notna(install['date']):
+                try:
+                    all_dates.append(pd.to_datetime(install['date']).date())
+                except:
+                    pass
 
     with tap_col2:
         if all_employees:
@@ -298,18 +300,65 @@ def render(vacuum_df, personnel_df):
         else:
             employee_filter = []
 
-    # Re-calculate tap counts if filtering by employee
-    if employee_filter and show_taps:
-        # Filter the tap info by selected employees
+    # Date range slider
+    date_filter = None
+    if all_dates:
+        min_date = min(all_dates)
+        max_date = max(all_dates)
+
+        if min_date < max_date:
+            from datetime import timedelta
+            st.markdown("**Installation Date Range:**")
+            date_filter = st.slider(
+                "Filter by installation date",
+                min_value=min_date,
+                max_value=max_date,
+                value=(min_date, max_date),
+                format="MM/DD/YY",
+                help="Show only taps installed within this date range"
+            )
+
+    # Helper function to filter installations
+    def filter_installations(installs, emp_filter, date_range):
+        filtered = installs
+        if emp_filter:
+            filtered = [i for i in filtered if i.get('employee') in emp_filter]
+        if date_range:
+            start_date, end_date = date_range
+            def in_range(install):
+                if 'date' not in install or pd.isna(install['date']):
+                    return False
+                try:
+                    inst_date = pd.to_datetime(install['date']).date()
+                    return start_date <= inst_date <= end_date
+                except:
+                    return False
+            filtered = [i for i in filtered if in_range(i)]
+        return filtered
+
+    # Re-calculate tap counts if filtering
+    if (employee_filter or date_filter) and show_taps:
+        # Filter the tap info
         filtered_sensor_tap_info = {}
         for sensor, details in sensor_tap_info.items():
-            filtered_installs = [i for i in details['installations'] if i.get('employee') in employee_filter]
+            filtered_installs = filter_installations(details['installations'], employee_filter, date_filter)
             if filtered_installs:
                 filtered_sensor_tap_info[sensor] = {
                     'total_taps': sum(i['taps'] for i in filtered_installs),
                     'installations': filtered_installs
                 }
         sensor_tap_info = filtered_sensor_tap_info
+
+        # Also filter unmapped mainlines for the summary
+        filtered_unmapped = {}
+        for mainline, details in unmapped_mainlines.items():
+            filtered_installs = filter_installations(details['installations'], employee_filter, date_filter)
+            if filtered_installs:
+                filtered_unmapped[mainline] = {
+                    'total_taps': sum(i['taps'] for i in filtered_installs),
+                    'installations': filtered_installs
+                }
+        unmapped_mainlines = filtered_unmapped
 
         # Update map_data tap counts
         map_data['Taps'] = map_data['Sensor'].apply(
