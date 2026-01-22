@@ -269,6 +269,53 @@ def render(vacuum_df, personnel_df):
             help="Size of markers on map"
         )
 
+    # Tapping overlay controls
+    st.markdown("**Tapping Overlay:**")
+    tap_col1, tap_col2 = st.columns([1, 2])
+
+    with tap_col1:
+        show_taps = st.checkbox("Show tap counts", value=True, help="Display tap installation counts on map")
+
+    # Get list of employees who have installed taps
+    all_employees = set()
+    for details in sensor_tap_info.values():
+        for install in details.get('installations', []):
+            if 'employee' in install and install['employee']:
+                all_employees.add(install['employee'])
+    for details in unmapped_mainlines.values():
+        for install in details.get('installations', []):
+            if 'employee' in install and install['employee']:
+                all_employees.add(install['employee'])
+
+    with tap_col2:
+        if all_employees:
+            employee_filter = st.multiselect(
+                "Filter by employee",
+                options=sorted(all_employees),
+                default=[],
+                help="Show only taps installed by selected employees (leave empty for all)"
+            )
+        else:
+            employee_filter = []
+
+    # Re-calculate tap counts if filtering by employee
+    if employee_filter and show_taps:
+        # Filter the tap info by selected employees
+        filtered_sensor_tap_info = {}
+        for sensor, details in sensor_tap_info.items():
+            filtered_installs = [i for i in details['installations'] if i.get('employee') in employee_filter]
+            if filtered_installs:
+                filtered_sensor_tap_info[sensor] = {
+                    'total_taps': sum(i['taps'] for i in filtered_installs),
+                    'installations': filtered_installs
+                }
+        sensor_tap_info = filtered_sensor_tap_info
+
+        # Update map_data tap counts
+        map_data['Taps'] = map_data['Sensor'].apply(
+            lambda s: sensor_tap_info.get(s, {}).get('total_taps', 0)
+        ).fillna(0).astype(int)
+
     st.divider()
 
     # Create map
@@ -405,8 +452,8 @@ def render(vacuum_df, personnel_df):
             weight=1
         ).add_to(m)
 
-        # Add small black label with tap count (only for counts >= 20 to reduce clutter)
-        if tap_count >= 20:
+        # Add small black label with tap count (only if enabled and counts >= 20)
+        if show_taps and tap_count >= 20:
             # Format the tap count
             if tap_count >= 1000:
                 tap_label = f"{tap_count/1000:.1f}k"
@@ -414,6 +461,7 @@ def render(vacuum_df, personnel_df):
                 tap_label = str(int(tap_count))
 
             # Create a small black label offset to upper-right of marker
+            # pointer-events: none prevents clicks from triggering Streamlit refresh
             folium.Marker(
                 location=[row['Latitude'], row['Longitude']],
                 icon=folium.DivIcon(
@@ -427,6 +475,7 @@ def render(vacuum_df, personnel_df):
                         white-space: nowrap;
                         transform: translate(8px, -20px);
                         box-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                        pointer-events: none;
                     ">{tap_label}</div>''',
                     icon_size=(30, 15),
                     icon_anchor=(0, 0)
