@@ -317,20 +317,19 @@ def render(personnel_df, vacuum_df):
             display_cols = ['Employee']
             col_names = ['Employee']
             
-            # Add job code columns
+            # Add job code columns - use short names since "Minutes per tap" is in header above
             for job_code in job_codes_to_show:
                 if job_code in productivity.columns:
                     display_cols.append(job_code)
-                    # Extract the part in parentheses if it exists, otherwise shorten
+                    # Extract just the distinguishing part
                     if '(' in job_code and ')' in job_code:
-                        # Get text inside parentheses
-                        paren_text = job_code[job_code.find('(')+1:job_code.find(')')]
-                        col_names.append(f"Min/Tap: ({paren_text})")
+                        # Get text inside parentheses only
+                        short_name = job_code[job_code.find('(')+1:job_code.find(')')]
                     else:
-                        # Remove common prefixes and shorten
-                        short_name = job_code.replace('Maple Tapping', '').replace('Maple tapping', '').strip(' -')
-                        short_name = short_name[:25] if len(short_name) > 25 else short_name
-                        col_names.append(f"Min/Tap: {short_name}" if short_name else f"Min/Tap: {job_code[:20]}")
+                        # Remove common prefixes
+                        short_name = job_code.replace('Maple Tapping', '').replace('Maple tapping', '').strip(' -:')
+                        short_name = short_name if short_name else job_code[:15]
+                    col_names.append(short_name)
             
             # Add totals
             display_cols.extend(['Taps_In', 'Hours', 'Overall_Taps_Per_Hour', 'Cost_Per_Tap', 'Labor_Cost'])
