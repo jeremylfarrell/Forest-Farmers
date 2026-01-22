@@ -246,7 +246,7 @@ def render(vacuum_df, personnel_df):
     with col1:
         map_style = st.selectbox(
             "Map Style",
-            ["Terrain", "Satellite", "Street"],
+            ["Street", "Terrain", "Satellite"],  # Street first as default (faster)
             help="Choose map background"
         )
 
@@ -460,12 +460,27 @@ def render(vacuum_df, personnel_df):
             else:
                 tap_label = str(int(tap_count))
 
+            # Build hover tooltip text with recent installations
+            tooltip_lines = [f"{row['Sensor']}: {int(tap_count)} taps"]
+            if installations[:3]:  # Show last 3 in tooltip
+                tooltip_lines.append("---")
+                for install in installations[:3]:
+                    date_str = ""
+                    if 'date' in install and pd.notna(install['date']):
+                        try:
+                            date_str = pd.to_datetime(install['date']).strftime('%m/%d')
+                        except:
+                            date_str = ""
+                    emp = install.get('employee', '?')[:12]
+                    tooltip_lines.append(f"{date_str} {emp}: {install['taps']}")
+            tooltip_text = "&#10;".join(tooltip_lines)  # &#10; is newline in title attr
+
             # Create a small black label offset to upper-right of marker
-            # pointer-events: none prevents clicks from triggering Streamlit refresh
+            # title attribute shows on hover
             folium.Marker(
                 location=[row['Latitude'], row['Longitude']],
                 icon=folium.DivIcon(
-                    html=f'''<div style="
+                    html=f'''<div title="{tooltip_text}" style="
                         background-color: rgba(0,0,0,0.85);
                         color: white;
                         border-radius: 3px;
@@ -475,15 +490,15 @@ def render(vacuum_df, personnel_df):
                         white-space: nowrap;
                         transform: translate(8px, -20px);
                         box-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-                        pointer-events: none;
+                        cursor: default;
                     ">{tap_label}</div>''',
                     icon_size=(30, 15),
                     icon_anchor=(0, 0)
                 )
             ).add_to(m)
 
-    # Display map
-    st_folium(m, width=None, height=600)
+    # Display map - use returned_objects=[] to prevent refreshes on every click
+    st_folium(m, width=None, height=600, returned_objects=[])
 
     st.divider()
 
