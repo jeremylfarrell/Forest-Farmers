@@ -355,7 +355,6 @@ def link_repair_lifecycle(repairs_df, max_days_apart=14):
         repair_ids = []
         lifecycle_statuses = []
         days_open_list = []
-        has_updates = []
 
         for idx, row in df.iterrows():
             group_key = row['Repair_Group']
@@ -367,35 +366,45 @@ def link_repair_lifecycle(repairs_df, max_days_apart=14):
 
             # Skip time-based linking for unique repairs (no mainline)
             if not group_key.startswith('UNIQUE_') and group_key in repair_tracker:
-                # Look for recent repairs in same group
+                # Look for recent repairs in same group - prefer MOST RECENT match
+                best_match = None
+                best_match_date = None
+
                 for tracked_id, tracked_date, tracked_status in repair_tracker[group_key]:
                     if pd.notna(current_date) and pd.notna(tracked_date):
                         days_apart = (current_date - tracked_date).days
 
                         # Link if within time window
                         if 0 <= days_apart <= max_days_apart:
-                            # Link to this repair
-                            matched_repair_id = tracked_id
+                            # Keep track of most recent match
+                            if best_match is None or tracked_date > best_match_date:
+                                best_match = (tracked_id, tracked_date, tracked_status)
+                                best_match_date = tracked_date
 
-                            # Update the tracker if this is a completion
-                            if current_status == 'Complete' and tracked_status != 'Complete':
-                                # Remove old entry and add updated one
-                                repair_tracker[group_key] = [
-                                    (tid, tdate, tstat) for tid, tdate, tstat in repair_tracker[group_key]
-                                    if tid != tracked_id
-                                ]
-                                repair_tracker[group_key].append((tracked_id, current_date, 'Complete'))
-                            break
+                # Use the most recent match if found
+                if best_match is not None:
+                    tracked_id, tracked_date, tracked_status = best_match
+                    matched_repair_id = tracked_id
+
+                    # Update the tracker if this is a completion
+                    if current_status == 'Complete' and tracked_status != 'Complete':
+                        # Remove old entry and add updated one
+                        repair_tracker[group_key] = [
+                            (tid, tdate, tstat) for tid, tdate, tstat in repair_tracker[group_key]
+                            if tid != tracked_id
+                        ]
+                        repair_tracker[group_key].append((tracked_id, current_date, 'Complete'))
 
             # If no match found, create new repair
             if matched_repair_id is None:
                 repair_id += 1
                 matched_repair_id = repair_id
 
-                # Add to tracker
-                if group_key not in repair_tracker:
-                    repair_tracker[group_key] = []
-                repair_tracker[group_key].append((matched_repair_id, current_date, current_status))
+                # Only add non-UNIQUE repairs to tracker (UNIQUE repairs are never linked)
+                if not group_key.startswith('UNIQUE_'):
+                    if group_key not in repair_tracker:
+                        repair_tracker[group_key] = []
+                    repair_tracker[group_key].append((matched_repair_id, current_date, current_status))
 
             # Determine lifecycle status
             if current_status == 'Complete':
@@ -403,32 +412,33 @@ def link_repair_lifecycle(repairs_df, max_days_apart=14):
             elif current_status == 'Not Complete':
                 lifecycle_status = 'In Progress'
             else:
+                # No completion keywords - mark as reported rather than assuming status
                 lifecycle_status = 'Reported'
 
             # Calculate days open (from first mention to this entry)
             first_date = current_date
-            for tracked_id, tracked_date, _ in repair_tracker.get(group_key, []):
-                if tracked_id == matched_repair_id and pd.notna(tracked_date):
-                    first_date = tracked_date
-                    break
+            if not group_key.startswith('UNIQUE_'):
+                for tracked_id, tracked_date, _ in repair_tracker.get(group_key, []):
+                    if tracked_id == matched_repair_id and pd.notna(tracked_date):
+                        first_date = tracked_date
+                        break
 
             days_open = None
             if pd.notna(current_date) and pd.notna(first_date):
                 days_open = (current_date - first_date).days
 
-            # Check if there are updates (multiple entries for same repair ID)
-            has_update = sum(1 for tid, _, _ in repair_tracker.get(group_key, []) if tid == matched_repair_id) > 1
-
             repair_ids.append(matched_repair_id)
             lifecycle_statuses.append(lifecycle_status)
             days_open_list.append(days_open)
-            has_updates.append(has_update)
 
         # Add new columns
         df['Repair_ID'] = repair_ids
         df['Lifecycle_Status'] = lifecycle_statuses
         df['Days_Open'] = days_open_list
-        df['Has_Update'] = has_updates
+
+        # Calculate Has_Update based on final repair ID counts (after all linking is done)
+        repair_id_counts = df['Repair_ID'].value_counts()
+        df['Has_Update'] = df['Repair_ID'].map(lambda rid: repair_id_counts.get(rid, 1) > 1)
 
         # Resort by date descending
         df = df.sort_values('Date', ascending=False)
