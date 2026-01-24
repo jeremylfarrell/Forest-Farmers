@@ -7,92 +7,166 @@ import streamlit as st
 import pandas as pd
 import re
 from datetime import datetime, timedelta
+from schema import SchemaMapper
 
 
 def parse_completion_status(text):
-    """Extract completion status from text"""
+    """
+    Extract completion status from text with robust pattern matching.
+
+    Returns:
+        'Complete', 'Not Complete', or None
+    """
     if not text or pd.isna(text):
         return None
 
-    text_upper = str(text).upper()
+    # Validate input is string-like
+    if not isinstance(text, (str, bytes)):
+        return None
 
-    # Check for completion indicators
-    if 'NOT COMPLETE' in text_upper or 'NOTCOMPLETE' in text_upper:
-        return 'Not Complete'
-    elif 'COMPLETE' in text_upper or 'REPEAR COMPLETE' in text_upper or 'REPAIR COMPLETE' in text_upper:
-        return 'Complete'
-    elif 'LINE COMPLETE' in text_upper:
-        return 'Complete'
+    try:
+        text_upper = str(text).upper().strip()
+    except (ValueError, TypeError):
+        return None
+
+    # Check for "NOT COMPLETE" patterns first (more specific)
+    # Use word boundaries to avoid matching within words
+    not_complete_patterns = [
+        r'\bNOT\s+COMPLETE\b',
+        r'\bNOTCOMPLETE\b',
+        r'\bINCOMPLETE\b',
+        r'\bUNFINISHED\b',
+        r'\bNOT\s+DONE\b'
+    ]
+
+    for pattern in not_complete_patterns:
+        if re.search(pattern, text_upper):
+            return 'Not Complete'
+
+    # Check for completion patterns (less specific, check after negatives)
+    # Include common variations and typos
+    complete_patterns = [
+        r'\bCOMPLETE\b',
+        r'\bREPAIR\s+COMPLETE\b',
+        r'\bREPEAR\s+COMPLETE\b',  # Common typo
+        r'\bLINE\s+COMPLETE\b',
+        r'\bMAINLINE\s+COMPLETE\b',
+        r'\bDONE\b',
+        r'\bFINISHED\b',
+        r'\bFIXED\b',
+        r'\bRESOLVED\b',
+        r'\bREPAIRED\b'
+    ]
+
+    for pattern in complete_patterns:
+        if re.search(pattern, text_upper):
+            return 'Complete'
 
     return None
 
 
 def parse_issue_type(text):
-    """Extract issue type(s) from text"""
+    """
+    Extract issue type(s) from text with improved pattern matching.
+
+    Returns:
+        List of issue types found (at least ['General Repair'] if no specific type detected)
+    """
     if not text or pd.isna(text):
         return []
 
-    text_upper = str(text).upper()
+    # Validate input is string-like
+    if not isinstance(text, (str, bytes)):
+        return []
+
+    try:
+        text_upper = str(text).upper().strip()
+    except (ValueError, TypeError):
+        return []
+
     issues = []
 
-    # Tree damage
-    if any(word in text_upper for word in ['TREE', 'CHAINSAW', 'CUT OFF']):
+    # Tree damage - use word boundaries
+    if re.search(r'\b(TREE|CHAINSAW)\b', text_upper) or 'CUT OFF' in text_upper:
         issues.append('Tree Damage')
 
-    # Spinseal issues
-    if any(word in text_upper for word in ['SPINSEAL', 'SPENSEAL', 'SPIN SEAL', 'SPIN SL', 'SPN SL']):
-        if 'REWELD' in text_upper:
+    # Spinseal issues - check variations with word boundaries
+    spinseal_patterns = [r'\bSPINSEAL\b', r'\bSPENSEAL\b', r'\bSPIN\s+SEAL\b', r'\bSPN\s+SL\b']
+    has_spinseal = any(re.search(pattern, text_upper) for pattern in spinseal_patterns)
+
+    if has_spinseal:
+        if re.search(r'\bREWELD\b', text_upper):
             issues.append('Spinseal Reweld')
-        elif 'BROKEN' in text_upper:
+        elif re.search(r'\bBROKEN\b', text_upper):
             issues.append('Spinseal Broken')
         else:
             issues.append('Spinseal Issue')
 
-    # Stainless needs
-    if 'STAINLESS' in text_upper:
+    # Stainless needs - word boundary
+    if re.search(r'\bSTAINLESS\b', text_upper):
         issues.append('Needs Stainless')
 
-    # Monitor/antenna issues
-    if 'ANTENNA' in text_upper:
+    # Monitor/antenna issues - word boundary
+    if re.search(r'\bANTENNA\b', text_upper):
         issues.append('Monitor Antenna')
 
-    # General broken items
-    if 'BROKEN' in text_upper and 'SPINSEAL' not in text_upper and 'SPENSEAL' not in text_upper:
+    # Leak detection - word boundary
+    if re.search(r'\b(LEAK|LEAKING|LEAKS)\b', text_upper):
+        issues.append('Leak Detected')
+
+    # Tubing issues - word boundary
+    if re.search(r'\bTUBING\b', text_upper):
+        issues.append('Tubing Issue')
+
+    # General broken items - only if not spinseal
+    if re.search(r'\bBROKEN\b', text_upper) and not has_spinseal:
         issues.append('Broken Equipment')
 
     return issues if issues else ['General Repair']
 
 
 def parse_location(text):
-    """Extract location information from text"""
+    """
+    Extract location information from text with improved pattern matching.
+
+    Returns:
+        Comma-separated string of locations or None
+    """
     if not text or pd.isna(text):
         return None
 
-    text_upper = str(text).upper()
+    # Validate input is string-like
+    if not isinstance(text, (str, bytes)):
+        return None
+
+    try:
+        text_upper = str(text).upper().strip()
+    except (ValueError, TypeError):
+        return None
+
     locations = []
 
-    # Position markers
-    if '@MID' in text_upper or '@ MID' in text_upper or 'MIDDLE' in text_upper or 'IN THE MIDDLE' in text_upper:
+    # Position markers - use more specific patterns
+    if re.search(r'@\s*MID\b|@ MID|\bMIDDLE\b|IN THE MIDDLE', text_upper):
         locations.append('Middle')
-    if '@BTM' in text_upper or '@ BTM' in text_upper or 'BOTTOM' in text_upper:
+    if re.search(r'@\s*BTM\b|@ BTM|\bBOTTOM\b', text_upper):
         locations.append('Bottom')
-    if 'TOP' in text_upper and 'STAINLESS' not in text_upper:  # Avoid "top need stainless"
-        # Check if "top" is actually a location reference
-        if 'AT TOP' in text_upper or 'THE TOP' in text_upper or '@TOP' in text_upper:
-            locations.append('Top')
+    # TOP - only match as location reference, not in words like "STOP", "LAPTOP"
+    if re.search(r'(AT|THE|@)\s*TOP\b|^\s*TOP\b', text_upper):
+        locations.append('Top')
 
-    # Component locations
-    if 'MONITOR' in text_upper:
+    # Component locations - use word boundaries
+    if re.search(r'\bMONITOR\b', text_upper):
         locations.append('Monitor')
-    if 'CONDUCTOR' in text_upper:
+    if re.search(r'\bCONDUCTOR\b', text_upper):
         locations.append('Conductor')
-    if 'MAINLINE' in text_upper:
+    if re.search(r'\bMAINLINE\b', text_upper):
         locations.append('Mainline')
 
     # Distance descriptors
-    if 'CLOSE TO END' in text_upper or 'AT THE END' in text_upper:
+    if re.search(r'(CLOSE TO|AT THE)\s+END\b|END OF', text_upper):
         locations.append('Near End')
-    if 'BEGINNING' in text_upper or 'AT THE BEGINNING' in text_upper:
+    if re.search(r'\bBEGINNING\b|AT THE BEGINNING|START OF', text_upper):
         locations.append('Beginning')
 
     return ', '.join(locations) if locations else None
@@ -100,60 +174,137 @@ def parse_location(text):
 
 def extract_repair_data(personnel_df):
     """
-    Extract and structure repair information from personnel data
+    Extract and structure repair information from personnel data.
+    Uses SchemaMapper for flexible column lookups.
 
-    Returns DataFrame with parsed repair information
+    Returns:
+        DataFrame with parsed repair information, or empty DataFrame on error
     """
     if personnel_df.empty:
         return pd.DataFrame()
 
-    # Filter to rows with repair-related jobs or notes
-    repair_keywords = ['fix', 'repair', 'tubing', 'issue', 'maintenance']
+    try:
+        # Use SchemaMapper for flexible column finding
+        mapper = SchemaMapper(personnel_df)
 
-    # Get relevant columns
-    notes_col = None
-    repairs_col = None
+        # Get relevant columns using schema mapper
+        notes_col = mapper.get_column('notes')
+        repairs_col = mapper.get_column('repairs_needed')
 
-    for col in personnel_df.columns:
-        col_lower = col.lower()
-        if 'notes' in col_lower:
-            notes_col = col
-        if 'repair' in col_lower and 'needed' in col_lower:
-            repairs_col = col
+        if not notes_col and not repairs_col:
+            # No repair-related columns found
+            return pd.DataFrame()
 
-    if not notes_col and not repairs_col:
+        repairs = []
+        parse_errors = 0
+        total_rows = 0
+
+        for idx, row in personnel_df.iterrows():
+            total_rows += 1
+
+            try:
+                # Safely get text values
+                notes_text = ''
+                repairs_text = ''
+
+                if notes_col:
+                    val = row.get(notes_col, '')
+                    if pd.notna(val) and isinstance(val, (str, bytes)):
+                        notes_text = str(val).strip()
+
+                if repairs_col:
+                    val = row.get(repairs_col, '')
+                    if pd.notna(val) and isinstance(val, (str, bytes)):
+                        repairs_text = str(val).strip()
+
+                # Skip if both are empty
+                if not notes_text and not repairs_text:
+                    continue
+
+                # Combine text for parsing
+                combined_text = f"{repairs_text} {notes_text}".strip()
+
+                # Skip generic entries without repair keywords
+                repair_keywords = ['complete', 'tree', 'spinseal', 'spenseal', 'stainless',
+                                 'broken', 'reweld', 'antenna', 'repair', 'fix', 'need', 'leak',
+                                 'tubing', 'issue', 'maintenance']
+
+                if not any(keyword in combined_text.lower() for keyword in repair_keywords):
+                    continue
+
+                # Parse the data with error handling
+                try:
+                    completion = parse_completion_status(combined_text)
+                    issues = parse_issue_type(combined_text)
+                    location = parse_location(combined_text)
+                except Exception as parse_err:
+                    # Skip this row if parsing fails
+                    parse_errors += 1
+                    continue
+
+                # Get metadata using SchemaMapper
+                date = row.get(mapper.get_column('date') or 'Date', None)
+
+                # Get employee name
+                employee_name_col = mapper.get_column('employee_name')
+                if employee_name_col:
+                    employee = str(row.get(employee_name_col, '')).strip()
+                else:
+                    # Fall back to EE First/Last columns
+                    first = str(row.get('EE First', '')).strip()
+                    last = str(row.get('EE Last', '')).strip()
+                    employee = f"{first} {last}".strip()
+
+                # Get mainline using SchemaMapper
+                mainline_col = mapper.get_column('mainline')
+                mainline = str(row.get(mainline_col or 'mainline', '')).strip() if mainline_col else ''
+
+                # Get job and site
+                job = str(row.get('Job', '')).strip()
+                site = str(row.get(mapper.get_column('site') or 'Site', 'Unknown')).strip()
+
+                # Create entry for each issue type
+                # NOTE: This creates multiple rows for repairs with multiple issues
+                # (e.g., "TREE damage and BROKEN spinseal" creates 2 rows)
+                # This allows filtering by issue type but inflates total counts
+                for issue in issues:
+                    repairs.append({
+                        'Date': date,
+                        'Site': site,
+                        'Employee': employee if employee else 'Unknown',
+                        'Mainline': mainline,
+                        'Job': job,
+                        'Issue Type': issue,
+                        'Location': location,
+                        'Status': completion,
+                        'Repairs Noted': repairs_text,
+                        'Notes': notes_text
+                    })
+
+            except Exception as row_err:
+                # Skip rows that cause errors
+                parse_errors += 1
+                continue
+
+        # Create DataFrame
+        df = pd.DataFrame(repairs)
+
+        if not df.empty and 'Date' in df.columns:
+            try:
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+                df = df.sort_values('Date', ascending=False)
+            except Exception:
+                pass  # Keep dataframe even if date sorting fails
+
+        # Show warning if many parse errors
+        if parse_errors > 0 and parse_errors / max(total_rows, 1) > 0.1:
+            st.warning(f"⚠️ {parse_errors} of {total_rows} rows had parsing errors and were skipped")
+
+        return df
+
+    except Exception as e:
+        st.error(f"Error extracting repair data: {str(e)}")
         return pd.DataFrame()
-
-    repairs = []
-
-    for idx, row in personnel_df.iterrows():
-        notes_text = str(row.get(notes_col, '')) if notes_col else ''
-        repairs_text = str(row.get(repairs_col, '')) if repairs_col else ''
-
-        # Skip if both are empty or just nan
-        if (not notes_text or notes_text == 'nan') and (not repairs_text or repairs_text == 'nan'):
-            continue
-
-        # Combine text for parsing
-        combined_text = f"{repairs_text} {notes_text}".strip()
-
-        # Skip generic entries without repair info
-        if not any(keyword in combined_text.lower() for keyword in
-                   ['complete', 'tree', 'spinseal', 'spenseal', 'stainless', 'broken',
-                    'reweld', 'antenna', 'repair', 'fix', 'need', 'leak']):
-            continue
-
-        # Parse the data
-        completion = parse_completion_status(combined_text)
-        issues = parse_issue_type(combined_text)
-        location = parse_location(combined_text)
-
-        # Get metadata
-        date = row.get('Date', None)
-        employee = f"{row.get('EE First', '')} {row.get('EE Last', '')}".strip()
-        mainline = row.get('mainline.', row.get('mainline', ''))
-        job = row.get('Job', '')
-        site = row.get('Site', 'Unknown')
 
         for issue in issues:
             repairs.append({
@@ -192,7 +343,23 @@ def render(personnel_df, vacuum_df=None):
     repairs_df = extract_repair_data(personnel_df)
 
     if repairs_df.empty:
-        st.info("No repair notes found in the current data")
+        st.info("📋 No repair notes found in the current data")
+        with st.expander("ℹ️ What does this mean?"):
+            st.markdown("""
+            **Why might no repairs be found?**
+
+            1. **Column names don't match** - Looking for columns containing "notes" or "repairs needed"
+            2. **No repair keywords** - Need words like: complete, tree, spinseal, broken, leak, etc.
+            3. **Wrong time period** - Adjust date range filter in sidebar
+            4. **Site filter** - Check if you're viewing the correct site (NY/VT/All)
+
+            **Expected column names:**
+            - Notes column: "Notes", "Comments", "Employee Notes", etc.
+            - Repairs column: "Repairs Needed", "Repairs", etc.
+
+            **Repair keywords detected:**
+            complete, tree, spinseal, broken, leak, tubing, stainless, antenna, reweld, fix, repair
+            """)
         return
 
     # Filters row
@@ -239,10 +406,12 @@ def render(personnel_df, vacuum_df=None):
     st.divider()
 
     # Summary metrics
+    st.caption("ℹ️ Note: Repairs with multiple issue types appear as separate rows, so counts may exceed unique repair entries")
+
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-        st.metric("Total Issues", len(filtered_df))
+        st.metric("Total Issue Entries", len(filtered_df))
 
     with col2:
         complete = len(filtered_df[filtered_df['Status'] == 'Complete'])
@@ -254,7 +423,7 @@ def render(personnel_df, vacuum_df=None):
 
     with col4:
         unknown = len(filtered_df[filtered_df['Status'].isna()])
-        st.metric("Unknown Status", unknown)
+        st.metric("Unknown Status", unknown, help="No completion keywords found in repair notes")
 
     with col5:
         mainlines_affected = filtered_df['Mainline'].nunique()
