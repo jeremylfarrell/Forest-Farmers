@@ -25,18 +25,11 @@ from utils import find_column
 # Import custom styling
 from styling import apply_custom_css
 
-from page_modules import (
-    vacuum,
-    employees,
-    employee_effectiveness,
-    raw_data,
-    sensor_map,
-    sap_forecast,
-    maintenance,
-    tapping,
-    data_quality,
-    repairs_analysis
-)
+# Import page registry
+from page_registry import get_registry
+
+# Import page modules for backward compatibility
+from page_modules import overview, daily_summary, problem_clusters
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -59,10 +52,20 @@ def check_password():
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == st.secrets["passwords"]["password"]:
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-        else:
+        try:
+            correct_password = st.secrets.get("passwords", {}).get("password")
+            if correct_password is None:
+                st.error("Password not configured in secrets. Please set 'passwords.password' in .streamlit/secrets.toml")
+                st.session_state["password_correct"] = False
+                return
+
+            if st.session_state["password"] == correct_password:
+                st.session_state["password_correct"] = True
+                del st.session_state["password"]  # Don't store password
+            else:
+                st.session_state["password_correct"] = False
+        except Exception as e:
+            st.error(f"Error checking password: {str(e)}")
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
@@ -222,15 +225,14 @@ def render_sidebar():
         # Page selection - PRIMARY NAVIGATION
         st.subheader("📄 Pages")
 
+        # Get page registry
+        registry = get_registry()
+
         # Main pages
+        main_page_names = registry.get_page_names_by_section("main")
         page = st.radio(
             "Select Page",
-            [
-                "🌳 Tapping Operations",
-                "👥 Employee Performance",
-                "🛠️ Repairs Analysis",
-                "🌍 Interactive Map"
-            ],
+            main_page_names,
             label_visibility="collapsed",
             key="main_pages"
         )
@@ -239,16 +241,10 @@ def render_sidebar():
         st.caption("⚠️ **Needs Work**")
 
         # Secondary pages that need work
+        other_page_names = registry.get_page_names_by_section("other")
         page2 = st.radio(
             "Other Pages",
-            [
-                "🔧 Vacuum Performance",
-                "⭐ Leak Checking",
-                "🔧 Maintenance & Leaks",
-                "⚠️ Alerts",
-                "🌡️ Sap Flow Forecast",
-                "📊 Raw Data"
-            ],
+            other_page_names,
             label_visibility="collapsed",
             key="other_pages"
         )
@@ -299,8 +295,14 @@ def render_sidebar():
 # DATA LOADING
 # ============================================================================
 
-def load_data(days_to_load):
-    """Load data from Google Sheets"""
+def load_data(days_to_load, site_filter="All Sites"):
+    """
+    Load data from Google Sheets with site filtering
+
+    Args:
+        days_to_load: Number of days to load
+        site_filter: "All Sites", "NY", or "VT" - only loads selected site(s)
+    """
 
     # Load configuration (works for both local and cloud!)
     ny_vacuum_url, vt_vacuum_url, personnel_url, credentials = load_config()
@@ -316,7 +318,7 @@ def load_data(days_to_load):
         VT_VACUUM_SHEET_URL = "your-vt-vacuum-sheet-url"
         PERSONNEL_SHEET_URL = "your-personnel-sheet-url"
 ```
-        
+
         **For Local Development:** Create a `.env` file with:
 ```
         NY_VACUUM_SHEET_URL=your-ny-vacuum-sheet-url
@@ -326,11 +328,11 @@ def load_data(days_to_load):
         """)
         st.stop()
 
-    # Load data with progress indication
-    with st.spinner('Loading data from Google Sheets...'):
+    # Load data with progress indication (only loads selected site(s))
+    with st.spinner(f'Loading {site_filter} data from Google Sheets...'):
         try:
-            vacuum_df = load_all_vacuum_data(ny_vacuum_url, vt_vacuum_url, credentials, days=days_to_load)
-            personnel_df = load_all_personnel_data(personnel_url, credentials, days=days_to_load)
+            vacuum_df = load_all_vacuum_data(ny_vacuum_url, vt_vacuum_url, credentials, days=days_to_load, site_filter=site_filter)
+            personnel_df = load_all_personnel_data(personnel_url, credentials, days=days_to_load, site_filter=site_filter)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
@@ -379,27 +381,7 @@ def show_data_info(vacuum_df, personnel_df):
             st.write("- No data loaded")
 
 
-def filter_data_by_site(vacuum_df, personnel_df, site_filter):
-    """
-    Filter dataframes by selected site
-
-    Args:
-        vacuum_df: Vacuum data
-        personnel_df: Personnel data
-        site_filter: Selected site ("All Sites", "NY", "VT")
-
-    Returns:
-        Tuple of (filtered_vacuum_df, filtered_personnel_df)
-    """
-    if site_filter == "All Sites":
-        # Return all data
-        return vacuum_df, personnel_df
-
-    # Filter to specific site
-    filtered_vacuum = vacuum_df[vacuum_df['Site'] == site_filter] if 'Site' in vacuum_df.columns else vacuum_df
-    filtered_personnel = personnel_df[personnel_df['Site'] == site_filter] if 'Site' in personnel_df.columns else personnel_df
-
-    return filtered_vacuum, filtered_personnel
+# Removed filter_data_by_site function - filtering now happens at data load time for better performance
 
 
 # ============================================================================
@@ -412,14 +394,11 @@ def main():
     # Render sidebar and get selections
     page, days_to_load, site_filter = render_sidebar()
 
-    # Load data
-    vacuum_df, personnel_df = load_data(days_to_load)
+    # Load data (with site filtering at load time for better performance)
+    vacuum_df, personnel_df = load_data(days_to_load, site_filter)
 
     # Show data loading info
     show_data_info(vacuum_df, personnel_df)
-
-    # Filter by site (based on login selection)
-    vacuum_df, personnel_df = filter_data_by_site(vacuum_df, personnel_df, site_filter)
 
     # Show filtering info at top of page
     if site_filter == "NY":
@@ -438,27 +417,16 @@ def main():
             sensor_count = vacuum_df[sensor_col].nunique()
             st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last 60 days")
 
-    # Route to selected page
-    if page == "🔧 Vacuum Performance":
-        vacuum.render(vacuum_df, personnel_df)
-    elif page == "🌳 Tapping Operations":
-        tapping.render(personnel_df, vacuum_df)
-    elif page == "👥 Employee Performance":
-        employees.render(personnel_df)
-    elif page == "⭐ Leak Checking":
-        employee_effectiveness.render(personnel_df, vacuum_df)
-    elif page == "🔧 Maintenance & Leaks":
-        maintenance.render(vacuum_df, personnel_df)
-    elif page == "🛠️ Repairs Analysis":
-        repairs_analysis.render(personnel_df, vacuum_df)
-    elif page == "⚠️ Alerts":
-        data_quality.render(personnel_df, vacuum_df)
-    elif page == "🌍 Interactive Map":
-        sensor_map.render(vacuum_df, personnel_df)
-    elif page == "🌡️ Sap Flow Forecast":
-        sap_forecast.render(vacuum_df, personnel_df)
-    elif page == "📊 Raw Data":
-        raw_data.render(vacuum_df, personnel_df)
+    # Route to selected page using registry
+    registry = get_registry()
+    try:
+        # Most pages expect (vacuum_df, personnel_df) or (personnel_df, vacuum_df)
+        # The registry will handle calling the correct render function
+        # For now, we pass both and let each page handle its own parameter order
+        registry.render_page(page, vacuum_df, personnel_df)
+    except ValueError as e:
+        st.error(f"Page not found: {page}")
+        st.info("Please select a page from the sidebar.")
 
 
 if __name__ == "__main__":

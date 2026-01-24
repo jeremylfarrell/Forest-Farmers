@@ -5,33 +5,7 @@ Helper functions used across the dashboard
 
 import pandas as pd
 from datetime import datetime, timedelta
-
-
-def find_column(df, *possible_names):
-    """
-    Find a column by checking multiple possible names (case-insensitive)
-    
-    Args:
-        df: DataFrame to search
-        *possible_names: Variable number of possible column names to check
-        
-    Returns:
-        Actual column name if found, None otherwise
-        
-    Example:
-        find_column(df, 'Employee Name', 'employee', 'name')
-    """
-    if df.empty:
-        return None
-
-    df_cols_lower = {col.lower(): col for col in df.columns}
-
-    for name in possible_names:
-        name_lower = name.lower()
-        if name_lower in df_cols_lower:
-            return df_cols_lower[name_lower]
-
-    return None
+from schema import find_column, SchemaMapper
 
 
 def get_vacuum_column(df):

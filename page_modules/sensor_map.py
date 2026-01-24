@@ -279,7 +279,7 @@ def render(vacuum_df, personnel_df):
             if 'date' in install and pd.notna(install['date']):
                 try:
                     all_dates.append(pd.to_datetime(install['date']).date())
-                except:
+                except (ValueError, TypeError):
                     pass
 
     # Tapping overlay controls - all in one row
@@ -331,7 +331,7 @@ def render(vacuum_df, personnel_df):
                 try:
                     inst_date = pd.to_datetime(install['date']).date()
                     return start_date <= inst_date <= end_date
-                except:
+                except (ValueError, TypeError):
                     return False
             filtered = [i for i in filtered if in_range(i)]
         return filtered
@@ -471,7 +471,7 @@ def render(vacuum_df, personnel_df):
                     if 'date' in install and pd.notna(install['date']):
                         try:
                             date_str = pd.to_datetime(install['date']).strftime('%m/%d/%y')
-                        except:
+                        except (ValueError, TypeError):
                             date_str = str(install['date'])[:10]
 
                     emp_str = install.get('employee', 'Unknown')
@@ -518,7 +518,7 @@ def render(vacuum_df, personnel_df):
                     if 'date' in install and pd.notna(install['date']):
                         try:
                             date_str = pd.to_datetime(install['date']).strftime('%m/%d')
-                        except:
+                        except (ValueError, TypeError):
                             date_str = ""
                     emp = install.get('employee', '?')[:12]
                     tooltip_lines.append(f"{date_str} {emp}: {install['taps']}")
@@ -615,7 +615,7 @@ def render(vacuum_df, personnel_df):
                 if 'date' in recent and pd.notna(recent['date']):
                     try:
                         last_date = pd.to_datetime(recent['date']).strftime('%m/%d/%y')
-                    except:
+                    except (ValueError, TypeError):
                         last_date = str(recent['date'])[:10]
                 if 'employee' in recent:
                     last_emp = recent['employee']
