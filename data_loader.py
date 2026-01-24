@@ -20,6 +20,7 @@ import streamlit as st
 import os
 import json
 import re
+import time
 import config
 
 
@@ -67,6 +68,51 @@ def connect_to_sheets(credentials_file):
     client = gspread.authorize(creds)
 
     return client
+
+
+def retry_with_backoff(func, max_retries=3, initial_delay=1.0, backoff_factor=2.0, error_types=(Exception,)):
+    """
+    Retry a function with exponential backoff for handling transient API errors.
+
+    Args:
+        func: Function to retry (should be a callable with no arguments)
+        max_retries: Maximum number of retry attempts (default 3)
+        initial_delay: Initial delay in seconds (default 1.0)
+        backoff_factor: Multiplier for delay after each retry (default 2.0)
+        error_types: Tuple of exception types to retry on (default all exceptions)
+
+    Returns:
+        Result of func() if successful
+
+    Raises:
+        Last exception if all retries fail
+    """
+    delay = initial_delay
+    last_exception = None
+
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except error_types as e:
+            last_exception = e
+
+            # Don't retry on authentication errors or permission errors
+            error_msg = str(e).lower()
+            if any(keyword in error_msg for keyword in ['authentication', 'permission', 'credentials', 'unauthorized', '401', '403']):
+                raise
+
+            # If this was the last attempt, raise the exception
+            if attempt == max_retries - 1:
+                raise
+
+            # Log retry attempt
+            st.warning(f"⚠️ API request failed (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+            delay *= backoff_factor
+
+    # This shouldn't be reached, but just in case
+    if last_exception:
+        raise last_exception
 
 
 def parse_site_from_job(job_text):
@@ -156,10 +202,10 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
     """
     try:
         client = connect_to_sheets(credentials_file)
-        sheet = client.open_by_url(sheet_url)
+        sheet = retry_with_backoff(lambda: client.open_by_url(sheet_url))
 
         # Get all worksheets (monthly tabs)
-        all_worksheets = sheet.worksheets()
+        all_worksheets = retry_with_backoff(lambda: sheet.worksheets())
 
         all_data = []
 
@@ -170,7 +216,7 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
 
             try:
                 # Get data from this worksheet
-                data = worksheet.get_all_records()
+                data = retry_with_backoff(lambda: worksheet.get_all_records())
                 if data:
                     df = pd.DataFrame(data)
                     all_data.append(df)
@@ -223,10 +269,10 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None, site_filter=
     """
     try:
         client = connect_to_sheets(credentials_file)
-        sheet = client.open_by_url(sheet_url)
+        sheet = retry_with_backoff(lambda: client.open_by_url(sheet_url))
 
         # Get all worksheets (monthly tabs)
-        all_worksheets = sheet.worksheets()
+        all_worksheets = retry_with_backoff(lambda: sheet.worksheets())
 
         all_data = []
 
@@ -237,7 +283,7 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None, site_filter=
 
             try:
                 # Get data from this worksheet
-                data = worksheet.get_all_records()
+                data = retry_with_backoff(lambda: worksheet.get_all_records())
                 if data:
                     df = pd.DataFrame(data)
                     all_data.append(df)
