@@ -310,7 +310,10 @@ def extract_repair_data(personnel_df):
 def link_repair_lifecycle(repairs_df, max_days_apart=14):
     """
     Link related repair entries to track lifecycle from reported → complete.
-    Groups repairs by mainline + issue type within a time window.
+    Groups repairs by mainline + issue type + employee within a time window.
+
+    Only links repairs that have a specific mainline (non-empty).
+    General repairs without mainlines are treated as unique entries.
 
     Args:
         repairs_df: DataFrame with individual repair entries
@@ -327,8 +330,23 @@ def link_repair_lifecycle(repairs_df, max_days_apart=14):
         df = repairs_df.copy()
         df = df.sort_values('Date')
 
-        # Create repair groups based on mainline + issue type
-        df['Repair_Group'] = df['Mainline'].fillna('Unknown') + '|' + df['Issue Type']
+        # Create repair groups based on mainline + issue type + employee
+        # Only link repairs with a specific mainline (prevents grouping unrelated general tasks)
+        # Include employee to distinguish different people working on similar issues
+        def create_group_key(row):
+            mainline = row['Mainline']
+            issue_type = row['Issue Type']
+            employee = row['Employee']
+
+            # If no mainline specified, treat as unique repair (don't group)
+            if pd.isna(mainline) or str(mainline).strip() == '':
+                # Use timestamp to ensure uniqueness for general repairs
+                return f"UNIQUE_{row.name}_{issue_type}"
+
+            # For repairs with mainline: group by mainline + issue + employee
+            return f"{mainline}|{issue_type}|{employee}"
+
+        df['Repair_Group'] = df.apply(create_group_key, axis=1)
 
         # Assign repair IDs and track lifecycle
         repair_id = 0
@@ -347,7 +365,8 @@ def link_repair_lifecycle(repairs_df, max_days_apart=14):
             # Find if this belongs to an existing repair
             matched_repair_id = None
 
-            if group_key in repair_tracker:
+            # Skip time-based linking for unique repairs (no mainline)
+            if not group_key.startswith('UNIQUE_') and group_key in repair_tracker:
                 # Look for recent repairs in same group
                 for tracked_id, tracked_date, tracked_status in repair_tracker[group_key]:
                     if pd.notna(current_date) and pd.notna(tracked_date):
