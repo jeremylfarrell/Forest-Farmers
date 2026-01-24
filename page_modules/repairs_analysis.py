@@ -306,27 +306,151 @@ def extract_repair_data(personnel_df):
         st.error(f"Error extracting repair data: {str(e)}")
         return pd.DataFrame()
 
-        for issue in issues:
-            repairs.append({
-                'Date': date,
-                'Site': site,
-                'Employee': employee,
-                'Mainline': mainline,
-                'Job': job,
-                'Issue Type': issue,
-                'Location': location,
-                'Status': completion,
-                'Repairs Noted': repairs_text if repairs_text != 'nan' else '',
-                'Notes': notes_text if notes_text != 'nan' else ''
-            })
 
-    df = pd.DataFrame(repairs)
+def link_repair_lifecycle(repairs_df, max_days_apart=14):
+    """
+    Link related repair entries to track lifecycle from reported → complete.
+    Groups repairs by mainline + issue type within a time window.
 
-    if not df.empty and 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    Args:
+        repairs_df: DataFrame with individual repair entries
+        max_days_apart: Maximum days between related entries (default 14)
+
+    Returns:
+        DataFrame with added columns: Repair_ID, Lifecycle_Status, Days_Open, Has_Update
+    """
+    if repairs_df.empty or 'Date' not in repairs_df.columns:
+        return repairs_df
+
+    try:
+        # Sort by date (oldest first for linking)
+        df = repairs_df.copy()
+        df = df.sort_values('Date')
+
+        # Create repair groups based on mainline + issue type
+        df['Repair_Group'] = df['Mainline'].fillna('Unknown') + '|' + df['Issue Type']
+
+        # Assign repair IDs and track lifecycle
+        repair_id = 0
+        repair_tracker = {}  # {group_key: [(repair_id, date, status)]}
+
+        repair_ids = []
+        lifecycle_statuses = []
+        days_open_list = []
+        has_updates = []
+
+        for idx, row in df.iterrows():
+            group_key = row['Repair_Group']
+            current_date = row['Date']
+            current_status = row['Status']
+
+            # Find if this belongs to an existing repair
+            matched_repair_id = None
+
+            if group_key in repair_tracker:
+                # Look for recent repairs in same group
+                for tracked_id, tracked_date, tracked_status in repair_tracker[group_key]:
+                    if pd.notna(current_date) and pd.notna(tracked_date):
+                        days_apart = (current_date - tracked_date).days
+
+                        # Link if within time window
+                        if 0 <= days_apart <= max_days_apart:
+                            # Link to this repair
+                            matched_repair_id = tracked_id
+
+                            # Update the tracker if this is a completion
+                            if current_status == 'Complete' and tracked_status != 'Complete':
+                                # Remove old entry and add updated one
+                                repair_tracker[group_key] = [
+                                    (tid, tdate, tstat) for tid, tdate, tstat in repair_tracker[group_key]
+                                    if tid != tracked_id
+                                ]
+                                repair_tracker[group_key].append((tracked_id, current_date, 'Complete'))
+                            break
+
+            # If no match found, create new repair
+            if matched_repair_id is None:
+                repair_id += 1
+                matched_repair_id = repair_id
+
+                # Add to tracker
+                if group_key not in repair_tracker:
+                    repair_tracker[group_key] = []
+                repair_tracker[group_key].append((matched_repair_id, current_date, current_status))
+
+            # Determine lifecycle status
+            if current_status == 'Complete':
+                lifecycle_status = 'Completed'
+            elif current_status == 'Not Complete':
+                lifecycle_status = 'In Progress'
+            else:
+                lifecycle_status = 'Reported'
+
+            # Calculate days open (from first mention to this entry)
+            first_date = current_date
+            for tracked_id, tracked_date, _ in repair_tracker.get(group_key, []):
+                if tracked_id == matched_repair_id and pd.notna(tracked_date):
+                    first_date = tracked_date
+                    break
+
+            days_open = None
+            if pd.notna(current_date) and pd.notna(first_date):
+                days_open = (current_date - first_date).days
+
+            # Check if there are updates (multiple entries for same repair ID)
+            has_update = sum(1 for tid, _, _ in repair_tracker.get(group_key, []) if tid == matched_repair_id) > 1
+
+            repair_ids.append(matched_repair_id)
+            lifecycle_statuses.append(lifecycle_status)
+            days_open_list.append(days_open)
+            has_updates.append(has_update)
+
+        # Add new columns
+        df['Repair_ID'] = repair_ids
+        df['Lifecycle_Status'] = lifecycle_statuses
+        df['Days_Open'] = days_open_list
+        df['Has_Update'] = has_updates
+
+        # Resort by date descending
         df = df.sort_values('Date', ascending=False)
 
-    return df
+        # Drop temporary column
+        df = df.drop(columns=['Repair_Group'])
+
+        return df
+
+    except Exception as e:
+        st.warning(f"Could not link repair lifecycle: {str(e)}")
+        # Return original data if linking fails
+        return repairs_df
+
+
+def get_active_repairs(repairs_df):
+    """
+    Get currently active (unresolved) repairs.
+    A repair is active if its most recent entry is not 'Completed'.
+
+    Args:
+        repairs_df: DataFrame with Repair_ID and Lifecycle_Status columns
+
+    Returns:
+        DataFrame with only active repairs (most recent entry per Repair_ID that isn't completed)
+    """
+    if repairs_df.empty or 'Repair_ID' not in repairs_df.columns:
+        return repairs_df
+
+    try:
+        # Get the most recent entry for each Repair_ID
+        latest_entries = repairs_df.sort_values('Date').groupby('Repair_ID').last().reset_index()
+
+        # Filter to only non-completed repairs
+        active = latest_entries[latest_entries['Lifecycle_Status'] != 'Completed'].copy()
+
+        return active
+
+    except Exception as e:
+        st.warning(f"Could not filter active repairs: {str(e)}")
+        return repairs_df
 
 
 def render(personnel_df, vacuum_df=None):
@@ -341,6 +465,10 @@ def render(personnel_df, vacuum_df=None):
 
     # Extract repair data
     repairs_df = extract_repair_data(personnel_df)
+
+    # Link repairs to track lifecycle (needed → in progress → complete)
+    if not repairs_df.empty:
+        repairs_df = link_repair_lifecycle(repairs_df, max_days_apart=14)
 
     if repairs_df.empty:
         st.info("📋 No repair notes found in the current data")
@@ -406,26 +534,44 @@ def render(personnel_df, vacuum_df=None):
     st.divider()
 
     # Summary metrics
-    st.caption("ℹ️ Note: Repairs with multiple issue types appear as separate rows, so counts may exceed unique repair entries")
+    st.caption("ℹ️ Note: 'Unique Repairs' counts distinct issues; 'Entries' counts all timesheet records (same repair tracked over multiple days)")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     with col1:
-        st.metric("Total Issue Entries", len(filtered_df))
+        unique_repairs = filtered_df['Repair_ID'].nunique() if 'Repair_ID' in filtered_df.columns else len(filtered_df)
+        st.metric("Unique Repairs", unique_repairs, help="Distinct repair issues (same repair tracked across days counts as 1)")
 
     with col2:
-        complete = len(filtered_df[filtered_df['Status'] == 'Complete'])
-        st.metric("Completed", complete)
+        st.metric("Total Entries", len(filtered_df), help="All timesheet repair entries")
 
     with col3:
-        incomplete = len(filtered_df[filtered_df['Status'] == 'Not Complete'])
-        st.metric("Not Complete", incomplete)
+        # Count unique repairs that are completed (latest status = Complete)
+        if 'Repair_ID' in filtered_df.columns and 'Lifecycle_Status' in filtered_df.columns:
+            completed_repairs = filtered_df[filtered_df['Lifecycle_Status'] == 'Completed']['Repair_ID'].nunique()
+        else:
+            completed_repairs = len(filtered_df[filtered_df['Status'] == 'Complete'])
+        st.metric("Completed", completed_repairs)
 
     with col4:
-        unknown = len(filtered_df[filtered_df['Status'].isna()])
-        st.metric("Unknown Status", unknown, help="No completion keywords found in repair notes")
+        # Count unique repairs that are in progress
+        if 'Lifecycle_Status' in filtered_df.columns:
+            in_progress_repairs = filtered_df[filtered_df['Lifecycle_Status'] == 'In Progress']['Repair_ID'].nunique()
+            st.metric("In Progress", in_progress_repairs)
+        else:
+            incomplete = len(filtered_df[filtered_df['Status'] == 'Not Complete'])
+            st.metric("Not Complete", incomplete)
 
     with col5:
+        # Count unique repairs that are just reported
+        if 'Lifecycle_Status' in filtered_df.columns:
+            reported_repairs = filtered_df[filtered_df['Lifecycle_Status'] == 'Reported']['Repair_ID'].nunique()
+            st.metric("Reported", reported_repairs)
+        else:
+            unknown = len(filtered_df[filtered_df['Status'].isna()])
+            st.metric("Unknown Status", unknown, help="No completion keywords found in repair notes")
+
+    with col6:
         mainlines_affected = filtered_df['Mainline'].nunique()
         st.metric("Mainlines", mainlines_affected)
 
@@ -450,25 +596,42 @@ def render(personnel_df, vacuum_df=None):
 
     # Outstanding repairs section
     st.subheader("Outstanding Repairs")
-    outstanding = filtered_df[filtered_df['Status'] != 'Complete'].copy()
+
+    # Get active (unresolved) repairs - shows most recent entry per repair, excludes completed
+    outstanding = get_active_repairs(filtered_df)
 
     if outstanding.empty:
-        st.success("No outstanding repairs in filtered data!")
+        st.success("✅ No outstanding repairs in filtered data!")
     else:
-        # Group by mainline for actionable view
-        st.markdown(f"**{len(outstanding)} repairs need attention:**")
+        # Count unique repairs
+        unique_outstanding = outstanding['Repair_ID'].nunique() if 'Repair_ID' in outstanding.columns else len(outstanding)
+        st.markdown(f"**{unique_outstanding} unique repairs need attention:**")
 
         # Show by issue type
         for issue_type in outstanding['Issue Type'].unique():
             issue_items = outstanding[outstanding['Issue Type'] == issue_type]
 
             with st.expander(f"{issue_type} ({len(issue_items)} items)", expanded=True):
-                display_df = issue_items[['Date', 'Mainline', 'Location', 'Employee', 'Repairs Noted', 'Notes']].copy()
+                # Include lifecycle columns if available
+                display_cols = ['Date', 'Mainline', 'Location', 'Employee', 'Repairs Noted', 'Notes']
+                if 'Lifecycle_Status' in issue_items.columns:
+                    display_cols.insert(1, 'Lifecycle_Status')
+                if 'Days_Open' in issue_items.columns:
+                    display_cols.insert(2, 'Days_Open')
+
+                display_df = issue_items[display_cols].copy()
                 display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d') if 'Date' in display_df.columns else ''
 
                 # Clean up display
                 display_df = display_df.fillna('')
-                display_df.columns = ['Date', 'Mainline', 'Location', 'Reported By', 'Repair Notes', 'Additional Notes']
+
+                # Rename columns for clarity
+                col_names = ['Date', 'Mainline', 'Location', 'Reported By', 'Repair Notes', 'Additional Notes']
+                if 'Lifecycle_Status' in display_cols:
+                    col_names.insert(1, 'Status')
+                if 'Days_Open' in display_cols:
+                    col_names.insert(2, 'Days Open')
+                display_df.columns = col_names
 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
@@ -479,15 +642,72 @@ def render(personnel_df, vacuum_df=None):
 
     recent = filtered_df.head(20).copy()
     if not recent.empty:
-        display_cols = ['Date', 'Site', 'Mainline', 'Issue Type', 'Location', 'Status', 'Employee']
+        display_cols = ['Date', 'Site', 'Mainline', 'Issue Type', 'Location']
+        if 'Lifecycle_Status' in recent.columns:
+            display_cols.append('Lifecycle_Status')
+        else:
+            display_cols.append('Status')
+        if 'Days_Open' in recent.columns:
+            display_cols.append('Days_Open')
+        display_cols.append('Employee')
+
         display_recent = recent[display_cols].copy()
         display_recent['Date'] = display_recent['Date'].dt.strftime('%Y-%m-%d %H:%M') if 'Date' in display_recent.columns else ''
-        display_recent['Status'] = display_recent['Status'].fillna('Unknown')
+
+        # Rename lifecycle columns for clarity
+        rename_map = {
+            'Lifecycle_Status': 'Lifecycle',
+            'Days_Open': 'Days Open',
+            'Status': 'Status'
+        }
+        display_recent = display_recent.rename(columns=rename_map)
         display_recent = display_recent.fillna('')
 
         st.dataframe(display_recent, use_container_width=True, hide_index=True)
 
     st.divider()
+
+    # Repair History/Timeline - Show all entries for repairs with multiple entries
+    if 'Repair_ID' in filtered_df.columns and 'Has_Update' in filtered_df.columns:
+        repairs_with_updates = filtered_df[filtered_df['Has_Update'] == True]['Repair_ID'].unique()
+        if len(repairs_with_updates) > 0:
+            st.subheader("Repair Lifecycle Timeline")
+            st.caption(f"📅 Showing {len(repairs_with_updates)} repairs with multiple entries (tracked over time)")
+
+            # Let user select a repair to view its history
+            repair_options = []
+            for repair_id in sorted(repairs_with_updates):
+                # Get info about this repair
+                repair_entries = filtered_df[filtered_df['Repair_ID'] == repair_id]
+                first_entry = repair_entries.iloc[0]
+                mainline = first_entry['Mainline']
+                issue_type = first_entry['Issue Type']
+                entry_count = len(repair_entries)
+                repair_options.append(f"{repair_id}: {mainline} - {issue_type} ({entry_count} entries)")
+
+            if repair_options:
+                selected_repair_str = st.selectbox("Select repair to view timeline:", repair_options)
+                selected_repair_id = selected_repair_str.split(':')[0]
+
+                # Show timeline for selected repair
+                timeline_df = filtered_df[filtered_df['Repair_ID'] == selected_repair_id].copy()
+                timeline_df = timeline_df.sort_values('Date')
+
+                st.markdown(f"**Timeline for Repair {selected_repair_id}:**")
+
+                # Display timeline
+                timeline_display = timeline_df[['Date', 'Lifecycle_Status', 'Status', 'Employee', 'Repairs Noted', 'Notes']].copy()
+                timeline_display['Date'] = timeline_display['Date'].dt.strftime('%Y-%m-%d %H:%M')
+                timeline_display = timeline_display.rename(columns={
+                    'Lifecycle_Status': 'Stage',
+                    'Repairs Noted': 'Repair Description',
+                    'Notes': 'Additional Notes'
+                })
+                timeline_display = timeline_display.fillna('')
+
+                st.dataframe(timeline_display, use_container_width=True, hide_index=True)
+
+            st.divider()
 
     # Detailed view with all data
     with st.expander("Full Repair Data"):
