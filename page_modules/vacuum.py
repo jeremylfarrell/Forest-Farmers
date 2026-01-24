@@ -37,9 +37,9 @@ def get_temperature_data(days=7):
         
         # Check if any temp was above freezing
         temp_df['Above_Freezing'] = (temp_df['High'] > 32) | (temp_df['Low'] > 32)
-        
+
         return temp_df
-    except:
+    except (requests.RequestException, KeyError, ValueError) as e:
         return None
 
 

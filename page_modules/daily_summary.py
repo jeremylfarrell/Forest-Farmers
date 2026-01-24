@@ -30,7 +30,7 @@ def get_today_weather_brief(latitude=43.4267, longitude=-73.7123):
             'high': data['temperature_2m_max'][0],
             'low': data['temperature_2m_min'][0]
         }
-    except:
+    except (requests.RequestException, KeyError, IndexError) as e:
         return None
 
 

@@ -178,15 +178,15 @@ def calculate_employee_performance(personnel_df, vacuum_df=None):
                                 'Mainlines_Visited', 'Taps_Installed',
                                 'Taps_Removed', 'Repairs']
 
-    # Calculate efficiency metrics
+    # Calculate efficiency metrics (with zero-division protection)
     employee_summary['Hours_Per_Mainline'] = (
-            employee_summary['Total_Hours'] / employee_summary['Mainlines_Visited']
+            employee_summary['Total_Hours'] / employee_summary['Mainlines_Visited'].replace(0, pd.NA)
     ).round(config.DECIMAL_PLACES['hours'])
 
     # Calculate efficiency score (placeholder - you can customize this)
     # Higher is better: more mainlines visited per hour
     employee_summary['Efficiency_Score'] = (
-            employee_summary['Mainlines_Visited'] / employee_summary['Total_Hours'] * config.EFFICIENCY_MULTIPLIER
+            employee_summary['Mainlines_Visited'] / employee_summary['Total_Hours'].replace(0, pd.NA) * config.EFFICIENCY_MULTIPLIER
     ).round(config.DECIMAL_PLACES['efficiency'])
 
     # Filter out employees with very few hours (to avoid skewed rankings)

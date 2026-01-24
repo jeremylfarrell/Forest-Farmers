@@ -58,6 +58,9 @@ def main():
     all_good &= check_file("metrics.py", "Metrics module")
     all_good &= check_file("utils.py", "Utilities module")
     all_good &= check_file("geo_clustering.py", "Geographic clustering")
+    all_good &= check_file("schema.py", "Schema mapper")
+    all_good &= check_file("page_registry.py", "Page registry")
+    all_good &= check_file("styling.py", "Custom styling")
     print()
 
     # Check page files
@@ -65,9 +68,12 @@ def main():
     print("-" * 60)
     all_good &= check_file("page_modules/__init__.py", "Page modules init file")
     all_good &= check_file("page_modules/overview.py", "Overview page")
-    all_good &= check_file("page_modules/mainlines.py", "Mainlines page")
+    all_good &= check_file("page_modules/vacuum.py", "Vacuum page")
+    all_good &= check_file("page_modules/tapping.py", "Tapping operations page")
     all_good &= check_file("page_modules/employees.py", "Employees page")
     all_good &= check_file("page_modules/employee_effectiveness.py", "Employee effectiveness")
+    all_good &= check_file("page_modules/repairs_analysis.py", "Repairs analysis page")
+    all_good &= check_file("page_modules/data_quality.py", "Data quality alerts")
     all_good &= check_file("page_modules/problem_clusters.py", "Problem clusters")
     all_good &= check_file("page_modules/sensor_map.py", "Interactive sensor map")
     all_good &= check_file("page_modules/sap_forecast.py", "Sap flow forecast")
@@ -101,16 +107,22 @@ def main():
     print("🔌 Page Module Imports:")
     print("-" * 60)
     try:
-        from page_modules import overview, mainlines, employees, employee_effectiveness, problem_clusters, raw_data, \
-            sensor_map, sap_forecast, maintenance, daily_summary
+        from page_modules import (
+            overview, vacuum, tapping, employees, employee_effectiveness,
+            repairs_analysis, data_quality, problem_clusters, sensor_map,
+            sap_forecast, maintenance, daily_summary, raw_data
+        )
         print("✓ All page modules imported successfully")
 
         # Check render functions
         modules = [
             (overview, 'overview'),
-            (mainlines, 'mainlines'),
+            (vacuum, 'vacuum'),
+            (tapping, 'tapping'),
             (employees, 'employees'),
             (employee_effectiveness, 'employee_effectiveness'),
+            (repairs_analysis, 'repairs_analysis'),
+            (data_quality, 'data_quality'),
             (problem_clusters, 'problem_clusters'),
             (sensor_map, 'sensor_map'),
             (sap_forecast, 'sap_forecast'),

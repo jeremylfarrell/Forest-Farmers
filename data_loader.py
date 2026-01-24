@@ -95,10 +95,10 @@ def parse_site_from_job(job_text):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading vacuum data from cache...")
-def load_all_vacuum_data(ny_sheet_url, vt_sheet_url, credentials_file, days=None):
+def load_all_vacuum_data(ny_sheet_url, vt_sheet_url, credentials_file, days=None, site_filter="All Sites"):
     """
-    Load ALL vacuum data from both NY and VT sheets
-    Combines data from both sites and adds 'Site' column
+    Load vacuum data from NY and/or VT sheets based on site filter
+    Combines data from selected sites and adds 'Site' column
 
     CACHED: Data is cached for 1 hour to dramatically improve performance.
     Switching between pages is instant after first load!
@@ -108,29 +108,32 @@ def load_all_vacuum_data(ny_sheet_url, vt_sheet_url, credentials_file, days=None
         vt_sheet_url: Google Sheet URL for VT vacuum data
         credentials_file: Path to credentials JSON
         days: If specified, only load last N days (None = all data)
+        site_filter: "All Sites", "NY", or "VT" - only loads data for selected site(s)
 
     Returns:
-        DataFrame with all vacuum readings from both sites, with 'Site' column
+        DataFrame with vacuum readings from selected site(s), with 'Site' column
     """
     all_sites_data = []
 
-    # Load NY site data
-    try:
-        ny_data = _load_vacuum_from_single_site(ny_sheet_url, credentials_file, days, site_name="NY")
-        if not ny_data.empty:
-            all_sites_data.append(ny_data)
-    except Exception as e:
-        st.warning(f"Error loading NY vacuum data: {str(e)}")
+    # Load NY site data (only if needed)
+    if site_filter in ("All Sites", "NY"):
+        try:
+            ny_data = _load_vacuum_from_single_site(ny_sheet_url, credentials_file, days, site_name="NY")
+            if not ny_data.empty:
+                all_sites_data.append(ny_data)
+        except Exception as e:
+            st.warning(f"Error loading NY vacuum data: {str(e)}")
 
-    # Load VT site data
-    try:
-        vt_data = _load_vacuum_from_single_site(vt_sheet_url, credentials_file, days, site_name="VT")
-        if not vt_data.empty:
-            all_sites_data.append(vt_data)
-    except Exception as e:
-        st.warning(f"Error loading VT vacuum data: {str(e)}")
+    # Load VT site data (only if needed)
+    if site_filter in ("All Sites", "VT"):
+        try:
+            vt_data = _load_vacuum_from_single_site(vt_sheet_url, credentials_file, days, site_name="VT")
+            if not vt_data.empty:
+                all_sites_data.append(vt_data)
+        except Exception as e:
+            st.warning(f"Error loading VT vacuum data: {str(e)}")
 
-    # Combine all sites
+    # Combine selected sites
     if not all_sites_data:
         return pd.DataFrame()
 
@@ -201,9 +204,9 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading personnel data from cache...")
-def load_all_personnel_data(sheet_url, credentials_file, days=None):
+def load_all_personnel_data(sheet_url, credentials_file, days=None, site_filter="All Sites"):
     """
-    Load ALL personnel data from all monthly tabs
+    Load personnel data from all monthly tabs, optionally filtered by site
     Adds 'Site' column based on Job description parsing
 
     CACHED: Data is cached for 1 hour to dramatically improve performance.
@@ -213,9 +216,10 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         sheet_url: Google Sheet URL
         credentials_file: Path to credentials JSON
         days: If specified, only load last N days (None = all data)
+        site_filter: "All Sites", "NY", or "VT" - filters data after loading
 
     Returns:
-        DataFrame with all personnel timesheet data including 'Site' column
+        DataFrame with personnel timesheet data including 'Site' column (filtered if requested)
     """
     try:
         client = connect_to_sheets(credentials_file)
@@ -255,6 +259,10 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         if days is not None and 'Date' in combined_df.columns:
             cutoff_date = datetime.now() - timedelta(days=days)
             combined_df = combined_df[combined_df['Date'] >= cutoff_date]
+
+        # Filter by site if specified
+        if site_filter != "All Sites" and 'Site' in combined_df.columns:
+            combined_df = combined_df[combined_df['Site'] == site_filter]
 
         return combined_df
 
@@ -312,7 +320,7 @@ def process_vacuum_data(df):
                     epoch = dt(1899, 12, 30)
                     # Add the number of days
                     return epoch + timedelta(days=float(excel_date))
-                except:
+                except (ValueError, TypeError, OverflowError):
                     return pd.NaT
             
             df[timestamp_col] = numeric_attempt.apply(excel_to_datetime)
