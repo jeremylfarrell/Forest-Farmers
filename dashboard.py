@@ -11,6 +11,7 @@ UPDATED: Clean sidebar - removed filters, auto-loads 60 days
 
 import streamlit as st
 import os
+import requests
 from datetime import datetime
 
 # Import configuration
@@ -278,6 +279,32 @@ def render_sidebar():
             # Clear all cached data
             st.cache_data.clear()
             st.rerun()
+
+        st.divider()
+
+        if st.button("⬇️ Sync from TSheets", use_container_width=True):
+            try:
+                token = st.secrets["github"]["GITHUB_TOKEN"]
+            except (KeyError, FileNotFoundError):
+                st.error("GitHub token not configured. Add [github] GITHUB_TOKEN to Streamlit secrets.")
+                token = None
+
+            if token:
+                with st.spinner("Triggering TSheets sync..."):
+                    resp = requests.post(
+                        "https://api.github.com/repos/jeremylfarrell/mike_personnel/actions/workflows/personnel_backup.yml/dispatches",
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github+json",
+                        },
+                        json={"ref": "main"},
+                        timeout=15,
+                    )
+                if resp.status_code == 204:
+                    st.success("Sync triggered! Data will update in ~30 seconds. Click **Refresh Data** after that.")
+                    st.cache_data.clear()
+                else:
+                    st.error(f"Failed to trigger sync: {resp.status_code} — {resp.text}")
 
         st.divider()
 
