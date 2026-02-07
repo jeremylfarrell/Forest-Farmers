@@ -411,7 +411,7 @@ def is_month_tab(tab_name):
     Supports multiple formats:
     - YYYY-MM (e.g., '2025-03')
     - Month_YYYY (e.g., 'Nov_2025', 'December_2025')
-    - Any tab with year 2024, 2025, 2026, or 2027 in the name
+    - Month YYYY with space (e.g., 'Jan 2026', 'December 2025')
 
     Args:
         tab_name: Name of the worksheet tab
@@ -422,17 +422,12 @@ def is_month_tab(tab_name):
     # Pattern 1: YYYY-MM format (e.g., '2025-11')
     pattern_yyyy_mm = r'^\d{4}-\d{2}$'
 
-    # Pattern 2: Month_YYYY format (e.g., 'Nov_2025', 'December_2025')
-    # Matches 3+ letters followed by underscore and 4 digits
-    pattern_month_year = r'^[A-Za-z]{3,}_\d{4}$'
-
-    # Pattern 3: Simple check - does it contain a recent year?
-    has_recent_year = any(year in tab_name for year in ['2024', '2025', '2026', '2027'])
+    # Pattern 2: Month_YYYY or Month YYYY format (e.g., 'Nov_2025', 'December 2025')
+    pattern_month_year = r'^[A-Za-z]{3,}[\s_]\d{4}$'
 
     # Return True if any pattern matches
     return (bool(re.match(pattern_yyyy_mm, tab_name)) or
-            bool(re.match(pattern_month_year, tab_name)) or
-            has_recent_year)
+            bool(re.match(pattern_month_year, tab_name)))
 
 
 def get_latest_data(vacuum_df, personnel_df, hours=24):
