@@ -384,7 +384,7 @@ def process_personnel_data(df):
 
     # Create full employee name if needed
     if 'EE First' in df.columns and 'EE Last' in df.columns:
-        df['Employee Name'] = df['EE First'] + ' ' + df['EE Last']
+        df['Employee Name'] = df['EE First'].astype(str).str.strip() + ' ' + df['EE Last'].astype(str).str.strip()
 
     # Clean mainline column name (handle potential variations)
     mainline_cols = [col for col in df.columns if 'mainline' in col.lower()]
