@@ -9,7 +9,7 @@ PERFORMANCE: Now includes caching for dramatic speed improvements!
 
 MULTI-SITE: Supports separate vacuum data for NY and VT sites
 - Loads both sites and adds 'Site' column
-- Parses personnel site from Job column
+- Uses Site column from personnel sheet when available, falls back to Job parsing
 """
 
 import pandas as pd
@@ -391,11 +391,18 @@ def process_personnel_data(df):
     if mainline_cols:
         df['mainline'] = df[mainline_cols[0]]
 
-    # Parse site from Job column
-    if 'Job' in df.columns:
+    # Use the Site column written by the backup script if available,
+    # otherwise fall back to parsing from the Job column.
+    if 'Site' in df.columns:
+        # Normalize: backup script uses 'Unknown', dashboard expects 'UNK'
+        df['Site'] = df['Site'].replace({'Unknown': 'UNK'})
+        # Fill any blanks by parsing from Job
+        mask = df['Site'].isna() | (df['Site'] == '') | (df['Site'] == 'UNK')
+        if mask.any() and 'Job' in df.columns:
+            df.loc[mask, 'Site'] = df.loc[mask, 'Job'].apply(parse_site_from_job)
+    elif 'Job' in df.columns:
         df['Site'] = df['Job'].apply(parse_site_from_job)
     else:
-        # If no Job column, default to UNK
         df['Site'] = 'UNK'
 
     # Remove rows with invalid dates
