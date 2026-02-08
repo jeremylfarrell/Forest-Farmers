@@ -223,17 +223,21 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
 
         all_data = []
 
-        # Try the single 'all' tab first
-        try:
-            ws = sheet.worksheet('all')
-            data = ws.get_all_records()
-            if data:
-                all_data.append(pd.DataFrame(data))
-        except gspread.exceptions.WorksheetNotFound:
-            pass
-        except Exception as e:
-            if config.DEBUG_MODE:
-                st.warning(f"Error reading 'all' tab: {str(e)}")
+        # Try the single 'all' tab first (case-insensitive search)
+        all_tab = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'all':
+                all_tab = ws
+                break
+
+        if all_tab is not None:
+            try:
+                data = all_tab.get_all_records()
+                if data:
+                    all_data.append(pd.DataFrame(data))
+            except Exception as e:
+                if config.DEBUG_MODE:
+                    st.warning(f"Error reading '{all_tab.title}' tab: {str(e)}")
 
         # Fallback: read monthly tabs if 'all' had no data
         if not all_data:
