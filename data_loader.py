@@ -221,26 +221,33 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         client = connect_to_sheets(credentials_file)
         sheet = client.open_by_url(sheet_url)
 
-        # Get all worksheets (monthly tabs)
-        all_worksheets = sheet.worksheets()
-
         all_data = []
 
-        for worksheet in all_worksheets:
-            # Skip any non-date worksheets
-            if not is_month_tab(worksheet.title):
-                continue
+        # Try the single 'all' tab first
+        try:
+            ws = sheet.worksheet('all')
+            data = ws.get_all_records()
+            if data:
+                all_data.append(pd.DataFrame(data))
+        except gspread.exceptions.WorksheetNotFound:
+            pass
+        except Exception as e:
+            if config.DEBUG_MODE:
+                st.warning(f"Error reading 'all' tab: {str(e)}")
 
-            try:
-                # Get data from this worksheet
-                data = worksheet.get_all_records()
-                if data:
-                    df = pd.DataFrame(data)
-                    all_data.append(df)
-            except Exception as e:
-                if config.DEBUG_MODE:
-                    st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
-                continue
+        # Fallback: read monthly tabs if 'all' had no data
+        if not all_data:
+            for worksheet in sheet.worksheets():
+                if not is_month_tab(worksheet.title):
+                    continue
+                try:
+                    data = worksheet.get_all_records()
+                    if data:
+                        all_data.append(pd.DataFrame(data))
+                except Exception as e:
+                    if config.DEBUG_MODE:
+                        st.warning(f"Skipped worksheet '{worksheet.title}': {str(e)}")
+                    continue
 
         if not all_data:
             return pd.DataFrame()
