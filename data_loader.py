@@ -313,6 +313,80 @@ def load_repairs_tracker(sheet_url, credentials_file):
         return pd.DataFrame()
 
 
+def save_repairs_updates(sheet_url, credentials_file, updated_df):
+    """
+    Write updated repairs data back to the 'repairs_tracker' tab in Google Sheets.
+    Matches rows by Repair ID and updates the editable columns only.
+    """
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        tracker_ws = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'repairs_tracker':
+                tracker_ws = ws
+                break
+
+        if tracker_ws is None:
+            return False, "repairs_tracker tab not found"
+
+        raw = tracker_ws.get_all_values()
+        if not raw:
+            return False, "No data in repairs_tracker tab"
+
+        headers = raw[0]
+
+        # Build a map of Repair ID -> row number (1-indexed, header is row 1)
+        repair_id_col = headers.index('Repair ID') if 'Repair ID' in headers else None
+        if repair_id_col is None:
+            return False, "Repair ID column not found"
+
+        row_map = {}
+        for i, row in enumerate(raw[1:], start=2):  # row 2 is first data row
+            if repair_id_col < len(row):
+                row_map[row[repair_id_col]] = i
+
+        # Editable columns and their positions
+        editable_cols = ['Status', 'Date Resolved', 'Resolved By', 'Notes']
+        col_indices = {}
+        for col in editable_cols:
+            if col in headers:
+                col_indices[col] = headers.index(col)
+
+        if not col_indices:
+            return False, "No editable columns found"
+
+        # Batch update cells
+        cells_to_update = []
+        for _, row in updated_df.iterrows():
+            repair_id = row.get('Repair ID', '')
+            if repair_id not in row_map:
+                continue
+            sheet_row = row_map[repair_id]
+
+            for col_name, col_idx in col_indices.items():
+                val = row.get(col_name, '')
+                if pd.isna(val) or val is None:
+                    val = ''
+                elif isinstance(val, pd.Timestamp):
+                    val = val.strftime('%Y-%m-%d') if not pd.isna(val) else ''
+                else:
+                    val = str(val)
+                cells_to_update.append(gspread.Cell(sheet_row, col_idx + 1, val))
+
+        if cells_to_update:
+            tracker_ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+
+        # Clear cache so next load picks up changes
+        st.cache_data.clear()
+
+        return True, f"Updated {len(updated_df)} repairs"
+
+    except Exception as e:
+        return False, f"Error saving: {e}"
+
+
 @st.cache_data
 def process_vacuum_data(df):
     """

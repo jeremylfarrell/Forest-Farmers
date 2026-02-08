@@ -1,7 +1,7 @@
 """
 Repairs Tracker Page Module
-Displays repair items from the repairs_tracker Google Sheet tab.
-Repairs are auto-populated from TSheets and managed by the operations manager.
+Interactive repairs management using st.data_editor.
+Manager can update Status, Date Resolved, Resolved By, and Notes directly in the dashboard.
 """
 
 import streamlit as st
@@ -9,12 +9,14 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
+from data_loader import save_repairs_updates
+
 
 def render(personnel_df, vacuum_df=None, repairs_df=None):
-    """Render the repairs tracker page"""
+    """Render the repairs tracker page with interactive editing"""
 
     st.title("Repairs Tracker")
-    st.markdown("*Repairs auto-populated from TSheets. Manager updates status in Google Sheets.*")
+    st.markdown("*Edit repairs directly below — change Status, add resolution details, then click Save.*")
 
     if repairs_df is None or repairs_df.empty:
         st.info(
@@ -85,34 +87,65 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
     st.divider()
 
-    # --- Open Repairs Table (main action list) ---
+    # --- Interactive Editor for Open Repairs ---
     open_repairs = filtered[filtered['Status'] == 'Open'].copy()
 
     if not open_repairs.empty:
         st.subheader(f"Open Repairs ({len(open_repairs)})")
-        st.caption("Sorted by age — oldest items need attention first")
+        st.caption("Edit Status, Date Resolved, Resolved By, or Notes directly in the table. Click **Save Changes** when done.")
 
         open_repairs = open_repairs.sort_values('Age (Days)', ascending=False)
 
-        # Color-code by age
-        def age_color(age):
-            if age > 14:
-                return 'background-color: #ff6b6b22'
-            elif age > 7:
-                return 'background-color: #ffa50022'
-            return ''
+        # Prepare editor columns
+        editor_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
+                       'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Notes']
+        editor_cols = [c for c in editor_cols if c in open_repairs.columns]
 
-        display_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description', 'Found By']
-        display_cols = [c for c in display_cols if c in open_repairs.columns]
-        display_df = open_repairs[display_cols].copy()
+        edit_df = open_repairs[editor_cols].copy()
 
-        if 'Date Found' in display_df.columns:
-            display_df['Date Found'] = display_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+        # Format Date Found for display but keep as string for editor
+        if 'Date Found' in edit_df.columns:
+            edit_df['Date Found'] = edit_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
 
-        styled = display_df.style.applymap(
-            age_color, subset=['Age (Days)'] if 'Age (Days)' in display_df.columns else []
+        # Ensure Date Resolved is string for the editor
+        if 'Date Resolved' in edit_df.columns:
+            edit_df['Date Resolved'] = edit_df['Date Resolved'].apply(
+                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+            )
+
+        # Ensure text columns are strings
+        for col in ['Resolved By', 'Notes']:
+            if col in edit_df.columns:
+                edit_df[col] = edit_df[col].fillna('').astype(str)
+
+        column_config = {
+            'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
+            'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
+            'Age (Days)': st.column_config.NumberColumn('Age (Days)', disabled=True),
+            'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
+            'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
+            'Found By': st.column_config.TextColumn('Found By', disabled=True),
+            'Status': st.column_config.SelectboxColumn(
+                'Status', options=['Open', 'Completed', 'Deferred'], required=True
+            ),
+            'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
+            'Resolved By': st.column_config.TextColumn('Resolved By'),
+            'Notes': st.column_config.TextColumn('Notes', width='medium'),
+        }
+
+        edited_open = st.data_editor(
+            edit_df,
+            column_config=column_config,
+            use_container_width=True,
+            hide_index=True,
+            height=min(400 + len(edit_df) * 10, 800),
+            key="open_repairs_editor"
         )
-        st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
+
+        # Save button for open repairs
+        if st.button("Save Changes", key="save_open", type="primary"):
+            _save_edits(edited_open)
+
     else:
         if selected_status == 'All' or selected_status == 'Open':
             st.success("No open repairs!")
@@ -171,30 +204,95 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
             st.divider()
 
-    # --- Completed Repairs ---
+    # --- Completed Repairs (editable) ---
     if not completed.empty:
         with st.expander(f"Completed Repairs ({len(completed)})"):
             comp_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
-                         'Date Resolved', 'Resolved By', 'Notes']
+                         'Status', 'Date Resolved', 'Resolved By', 'Notes']
             comp_cols = [c for c in comp_cols if c in completed.columns]
-            comp_display = completed[comp_cols].copy()
-            if 'Date Found' in comp_display.columns:
-                comp_display['Date Found'] = comp_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
-            if 'Date Resolved' in comp_display.columns:
-                comp_display['Date Resolved'] = comp_display['Date Resolved'].dt.strftime('%Y-%m-%d').fillna('')
-            comp_display = comp_display.sort_values('Date Found', ascending=False) if 'Date Found' in comp_display.columns else comp_display
-            st.dataframe(comp_display, use_container_width=True, hide_index=True)
+            comp_edit = completed[comp_cols].copy()
 
-    # --- Deferred Repairs ---
+            if 'Date Found' in comp_edit.columns:
+                comp_edit['Date Found'] = comp_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            if 'Date Resolved' in comp_edit.columns:
+                comp_edit['Date Resolved'] = comp_edit['Date Resolved'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+                )
+            for col in ['Resolved By', 'Notes']:
+                if col in comp_edit.columns:
+                    comp_edit[col] = comp_edit[col].fillna('').astype(str)
+
+            comp_edit = comp_edit.sort_values('Date Found', ascending=False) if 'Date Found' in comp_edit.columns else comp_edit
+
+            comp_config = {
+                'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
+                'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
+                'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
+                'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
+                'Found By': st.column_config.TextColumn('Found By', disabled=True),
+                'Status': st.column_config.SelectboxColumn(
+                    'Status', options=['Open', 'Completed', 'Deferred'], required=True
+                ),
+                'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
+                'Resolved By': st.column_config.TextColumn('Resolved By'),
+                'Notes': st.column_config.TextColumn('Notes', width='medium'),
+            }
+
+            edited_comp = st.data_editor(
+                comp_edit,
+                column_config=comp_config,
+                use_container_width=True,
+                hide_index=True,
+                key="completed_repairs_editor"
+            )
+
+            if st.button("Save Changes", key="save_completed", type="primary"):
+                _save_edits(edited_comp)
+
+    # --- Deferred Repairs (editable) ---
     deferred = filtered[filtered['Status'] == 'Deferred']
     if not deferred.empty:
         with st.expander(f"Deferred Repairs ({len(deferred)})"):
-            def_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description', 'Found By', 'Notes']
+            def_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
+                        'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Notes']
             def_cols = [c for c in def_cols if c in deferred.columns]
-            def_display = deferred[def_cols].copy()
-            if 'Date Found' in def_display.columns:
-                def_display['Date Found'] = def_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
-            st.dataframe(def_display, use_container_width=True, hide_index=True)
+            def_edit = deferred[def_cols].copy()
+
+            if 'Date Found' in def_edit.columns:
+                def_edit['Date Found'] = def_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            if 'Date Resolved' in def_edit.columns:
+                def_edit['Date Resolved'] = def_edit['Date Resolved'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+                )
+            for col in ['Resolved By', 'Notes']:
+                if col in def_edit.columns:
+                    def_edit[col] = def_edit[col].fillna('').astype(str)
+
+            def_config = {
+                'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
+                'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
+                'Age (Days)': st.column_config.NumberColumn('Age (Days)', disabled=True),
+                'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
+                'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
+                'Found By': st.column_config.TextColumn('Found By', disabled=True),
+                'Status': st.column_config.SelectboxColumn(
+                    'Status', options=['Open', 'Completed', 'Deferred'], required=True
+                ),
+                'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
+                'Resolved By': st.column_config.TextColumn('Resolved By'),
+                'Notes': st.column_config.TextColumn('Notes', width='medium'),
+            }
+
+            edited_def = st.data_editor(
+                def_edit,
+                column_config=def_config,
+                use_container_width=True,
+                hide_index=True,
+                key="deferred_repairs_editor"
+            )
+
+            if st.button("Save Changes", key="save_deferred", type="primary"):
+                _save_edits(edited_def)
 
     # --- How to Use ---
     with st.expander("How to use the Repairs Tracker"):
@@ -202,16 +300,55 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         **Repairs are auto-populated from TSheets** each day when workers log issues
         in the "Repairs needed" field.
 
-        **To manage repairs**, open the Google Sheet and go to the `repairs_tracker` tab:
+        **To manage repairs directly in this dashboard:**
 
-        1. **Mark as Completed:** Change the `Status` column from `Open` to `Completed`,
-           fill in `Date Resolved` and optionally `Resolved By`
+        1. **Mark as Completed:** Change the `Status` dropdown from `Open` to `Completed`,
+           fill in `Date Resolved` (YYYY-MM-DD) and optionally `Resolved By`
         2. **Defer a repair:** Change `Status` to `Deferred` and add a note explaining why
         3. **Add context:** Use the `Notes` column for any additional information
+        4. **Save:** Click the **Save Changes** button to write your updates to Google Sheets
 
         **Tips:**
-        - Use Google Sheets Data Validation on the Status column for a dropdown
-          (Data > Data validation > List: Open, Completed, Deferred)
-        - Sort by Date Found to see the oldest issues first
+        - Changes are NOT saved until you click **Save Changes**
         - The dashboard refreshes data every hour or on manual refresh
+        - You can still edit directly in Google Sheets if preferred
         """)
+
+
+def _save_edits(edited_df):
+    """Save edits back to Google Sheets"""
+    if 'Repair ID' not in edited_df.columns:
+        st.error("Cannot save: Repair ID column missing")
+        return
+
+    # Get sheet config - try secrets first, then .env
+    sheet_url = None
+    credentials_file = 'credentials.json'
+
+    try:
+        if hasattr(st, 'secrets') and 'sheets' in st.secrets:
+            sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
+    except (KeyError, FileNotFoundError):
+        pass
+
+    if not sheet_url:
+        try:
+            import os
+            from dotenv import load_dotenv
+            load_dotenv()
+            sheet_url = os.getenv('PERSONNEL_SHEET_URL')
+        except ImportError:
+            pass
+
+    if not sheet_url:
+        st.error("Could not find sheet URL in configuration")
+        return
+
+    with st.spinner("Saving changes to Google Sheets..."):
+        success, message = save_repairs_updates(sheet_url, credentials_file, edited_df)
+
+    if success:
+        st.success(f"Saved! {message}")
+        st.rerun()
+    else:
+        st.error(message)
