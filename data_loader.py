@@ -232,9 +232,12 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
 
         if all_tab is not None:
             try:
-                data = all_tab.get_all_records()
-                if data:
-                    all_data.append(pd.DataFrame(data))
+                raw = all_tab.get_all_values()
+                if raw and len(raw) > 1:
+                    headers = raw[0]
+                    rows = [r for r in raw[1:] if any(cell != '' for cell in r)]
+                    df = pd.DataFrame(rows, columns=headers)
+                    all_data.append(df)
             except Exception as e:
                 if config.DEBUG_MODE:
                     st.warning(f"Error reading '{all_tab.title}' tab: {str(e)}")
