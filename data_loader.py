@@ -277,6 +277,42 @@ def load_all_personnel_data(sheet_url, credentials_file, days=None):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600, show_spinner="Loading repairs tracker...")
+def load_repairs_tracker(sheet_url, credentials_file):
+    """Load repairs tracker data from the 'repairs_tracker' tab."""
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        tracker_ws = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'repairs_tracker':
+                tracker_ws = ws
+                break
+
+        if tracker_ws is None:
+            return pd.DataFrame()
+
+        raw = tracker_ws.get_all_values()
+        if not raw or len(raw) <= 1:
+            return pd.DataFrame()
+
+        headers = raw[0]
+        rows = [r for r in raw[1:] if any(cell != '' for cell in r)]
+        df = pd.DataFrame(rows, columns=headers)
+
+        if 'Date Found' in df.columns:
+            df['Date Found'] = pd.to_datetime(df['Date Found'], errors='coerce')
+        if 'Date Resolved' in df.columns:
+            df['Date Resolved'] = pd.to_datetime(df['Date Resolved'], errors='coerce')
+
+        return df
+
+    except Exception as e:
+        st.warning(f"Could not load repairs tracker: {e}")
+        return pd.DataFrame()
+
+
 @st.cache_data
 def process_vacuum_data(df):
     """

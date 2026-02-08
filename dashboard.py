@@ -18,7 +18,7 @@ from datetime import datetime
 import config
 
 # Import data loading
-from data_loader import load_all_vacuum_data, load_all_personnel_data
+from data_loader import load_all_vacuum_data, load_all_personnel_data, load_repairs_tracker
 
 # Import utility functions
 from utils import find_column
@@ -358,12 +358,13 @@ def load_data(days_to_load):
         try:
             vacuum_df = load_all_vacuum_data(ny_vacuum_url, vt_vacuum_url, credentials, days=days_to_load)
             personnel_df = load_all_personnel_data(personnel_url, credentials)
+            repairs_df = load_repairs_tracker(personnel_url, credentials)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
             st.stop()
 
-    return vacuum_df, personnel_df
+    return vacuum_df, personnel_df, repairs_df
 
 
 def show_data_info(vacuum_df, personnel_df):
@@ -406,27 +407,28 @@ def show_data_info(vacuum_df, personnel_df):
             st.write("- No data loaded")
 
 
-def filter_data_by_site(vacuum_df, personnel_df, site_filter):
+def filter_data_by_site(vacuum_df, personnel_df, repairs_df, site_filter):
     """
     Filter dataframes by selected site
 
     Args:
         vacuum_df: Vacuum data
         personnel_df: Personnel data
+        repairs_df: Repairs tracker data
         site_filter: Selected site ("All Sites", "NY", "VT")
 
     Returns:
-        Tuple of (filtered_vacuum_df, filtered_personnel_df)
+        Tuple of (filtered_vacuum_df, filtered_personnel_df, filtered_repairs_df)
     """
     if site_filter == "All Sites":
-        # Return all data
-        return vacuum_df, personnel_df
+        return vacuum_df, personnel_df, repairs_df
 
     # Filter to specific site
     filtered_vacuum = vacuum_df[vacuum_df['Site'] == site_filter] if 'Site' in vacuum_df.columns else vacuum_df
     filtered_personnel = personnel_df[personnel_df['Site'] == site_filter] if 'Site' in personnel_df.columns else personnel_df
+    filtered_repairs = repairs_df[repairs_df['Site'] == site_filter] if not repairs_df.empty and 'Site' in repairs_df.columns else repairs_df
 
-    return filtered_vacuum, filtered_personnel
+    return filtered_vacuum, filtered_personnel, filtered_repairs
 
 
 # ============================================================================
@@ -440,13 +442,13 @@ def main():
     page, days_to_load, site_filter = render_sidebar()
 
     # Load data
-    vacuum_df, personnel_df = load_data(days_to_load)
+    vacuum_df, personnel_df, repairs_df = load_data(days_to_load)
 
     # Show data loading info
     show_data_info(vacuum_df, personnel_df)
 
     # Filter by site (based on login selection)
-    vacuum_df, personnel_df = filter_data_by_site(vacuum_df, personnel_df, site_filter)
+    vacuum_df, personnel_df, repairs_df = filter_data_by_site(vacuum_df, personnel_df, repairs_df, site_filter)
 
     # Show filtering info at top of page
     if site_filter == "NY":
@@ -477,7 +479,7 @@ def main():
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
     elif page == "🛠️ Repairs Analysis":
-        repairs_analysis.render(personnel_df, vacuum_df)
+        repairs_analysis.render(personnel_df, vacuum_df, repairs_df)
     elif page == "⚠️ Alerts":
         data_quality.render(personnel_df, vacuum_df)
     elif page == "🌍 Interactive Map":

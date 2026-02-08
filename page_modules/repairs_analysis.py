@@ -1,349 +1,217 @@
 """
-Repairs Analysis Page Module
-Parses unstructured Notes and Repairs columns to extract actionable repair information
+Repairs Tracker Page Module
+Displays repair items from the repairs_tracker Google Sheet tab.
+Repairs are auto-populated from TSheets and managed by the operations manager.
 """
 
 import streamlit as st
 import pandas as pd
-import re
-from datetime import datetime, timedelta
+import plotly.express as px
+from datetime import datetime
 
 
-def parse_completion_status(text):
-    """Extract completion status from text"""
-    if not text or pd.isna(text):
-        return None
+def render(personnel_df, vacuum_df=None, repairs_df=None):
+    """Render the repairs tracker page"""
 
-    text_upper = str(text).upper()
+    st.title("Repairs Tracker")
+    st.markdown("*Repairs auto-populated from TSheets. Manager updates status in Google Sheets.*")
 
-    # Check for completion indicators
-    if 'NOT COMPLETE' in text_upper or 'NOTCOMPLETE' in text_upper:
-        return 'Not Complete'
-    elif 'COMPLETE' in text_upper or 'REPEAR COMPLETE' in text_upper or 'REPAIR COMPLETE' in text_upper:
-        return 'Complete'
-    elif 'LINE COMPLETE' in text_upper:
-        return 'Complete'
-
-    return None
-
-
-def parse_issue_type(text):
-    """Extract issue type(s) from text"""
-    if not text or pd.isna(text):
-        return []
-
-    text_upper = str(text).upper()
-    issues = []
-
-    # Tree damage
-    if any(word in text_upper for word in ['TREE', 'CHAINSAW', 'CUT OFF']):
-        issues.append('Tree Damage')
-
-    # Spinseal issues
-    if any(word in text_upper for word in ['SPINSEAL', 'SPENSEAL', 'SPIN SEAL', 'SPIN SL', 'SPN SL']):
-        if 'REWELD' in text_upper:
-            issues.append('Spinseal Reweld')
-        elif 'BROKEN' in text_upper:
-            issues.append('Spinseal Broken')
-        else:
-            issues.append('Spinseal Issue')
-
-    # Stainless needs
-    if 'STAINLESS' in text_upper:
-        issues.append('Needs Stainless')
-
-    # Monitor/antenna issues
-    if 'ANTENNA' in text_upper:
-        issues.append('Monitor Antenna')
-
-    # General broken items
-    if 'BROKEN' in text_upper and 'SPINSEAL' not in text_upper and 'SPENSEAL' not in text_upper:
-        issues.append('Broken Equipment')
-
-    return issues if issues else ['General Repair']
-
-
-def parse_location(text):
-    """Extract location information from text"""
-    if not text or pd.isna(text):
-        return None
-
-    text_upper = str(text).upper()
-    locations = []
-
-    # Position markers
-    if '@MID' in text_upper or '@ MID' in text_upper or 'MIDDLE' in text_upper or 'IN THE MIDDLE' in text_upper:
-        locations.append('Middle')
-    if '@BTM' in text_upper or '@ BTM' in text_upper or 'BOTTOM' in text_upper:
-        locations.append('Bottom')
-    if 'TOP' in text_upper and 'STAINLESS' not in text_upper:  # Avoid "top need stainless"
-        # Check if "top" is actually a location reference
-        if 'AT TOP' in text_upper or 'THE TOP' in text_upper or '@TOP' in text_upper:
-            locations.append('Top')
-
-    # Component locations
-    if 'MONITOR' in text_upper:
-        locations.append('Monitor')
-    if 'CONDUCTOR' in text_upper:
-        locations.append('Conductor')
-    if 'MAINLINE' in text_upper:
-        locations.append('Mainline')
-
-    # Distance descriptors
-    if 'CLOSE TO END' in text_upper or 'AT THE END' in text_upper:
-        locations.append('Near End')
-    if 'BEGINNING' in text_upper or 'AT THE BEGINNING' in text_upper:
-        locations.append('Beginning')
-
-    return ', '.join(locations) if locations else None
-
-
-def extract_repair_data(personnel_df):
-    """
-    Extract and structure repair information from personnel data
-
-    Returns DataFrame with parsed repair information
-    """
-    if personnel_df.empty:
-        return pd.DataFrame()
-
-    # Filter to rows with repair-related jobs or notes
-    repair_keywords = ['fix', 'repair', 'tubing', 'issue', 'maintenance']
-
-    # Get relevant columns
-    notes_col = None
-    repairs_col = None
-
-    for col in personnel_df.columns:
-        col_lower = col.lower()
-        if 'notes' in col_lower:
-            notes_col = col
-        if 'repair' in col_lower and 'needed' in col_lower:
-            repairs_col = col
-
-    if not notes_col and not repairs_col:
-        return pd.DataFrame()
-
-    repairs = []
-
-    for idx, row in personnel_df.iterrows():
-        notes_text = str(row.get(notes_col, '')) if notes_col else ''
-        repairs_text = str(row.get(repairs_col, '')) if repairs_col else ''
-
-        # Skip if both are empty or just nan
-        if (not notes_text or notes_text == 'nan') and (not repairs_text or repairs_text == 'nan'):
-            continue
-
-        # Combine text for parsing
-        combined_text = f"{repairs_text} {notes_text}".strip()
-
-        # Skip generic entries without repair info
-        if not any(keyword in combined_text.lower() for keyword in
-                   ['complete', 'tree', 'spinseal', 'spenseal', 'stainless', 'broken',
-                    'reweld', 'antenna', 'repair', 'fix', 'need', 'leak']):
-            continue
-
-        # Parse the data
-        completion = parse_completion_status(combined_text)
-        issues = parse_issue_type(combined_text)
-        location = parse_location(combined_text)
-
-        # Get metadata
-        date = row.get('Date', None)
-        employee = f"{row.get('EE First', '')} {row.get('EE Last', '')}".strip()
-        mainline = row.get('mainline.', row.get('mainline', ''))
-        job = row.get('Job', '')
-        site = row.get('Site', 'Unknown')
-
-        for issue in issues:
-            repairs.append({
-                'Date': date,
-                'Site': site,
-                'Employee': employee,
-                'Mainline': mainline,
-                'Job': job,
-                'Issue Type': issue,
-                'Location': location,
-                'Status': completion,
-                'Repairs Noted': repairs_text if repairs_text != 'nan' else '',
-                'Notes': notes_text if notes_text != 'nan' else ''
-            })
-
-    df = pd.DataFrame(repairs)
-
-    if not df.empty and 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.sort_values('Date', ascending=False)
-
-    return df
-
-
-def render(personnel_df, vacuum_df=None):
-    """Render the repairs analysis page"""
-
-    st.title("Repairs Analysis")
-    st.markdown("*Parsed repair information from timesheet notes*")
-
-    if personnel_df.empty:
-        st.warning("No personnel data available")
+    if repairs_df is None or repairs_df.empty:
+        st.info(
+            "No repairs data yet. Repairs will appear here automatically after the next "
+            "TSheets sync when workers log issues in the 'Repairs needed' field."
+        )
         return
 
-    # Extract repair data
-    repairs_df = extract_repair_data(personnel_df)
+    df = repairs_df.copy()
 
-    if repairs_df.empty:
-        st.info("No repair notes found in the current data")
-        return
+    # Calculate age for open repairs
+    if 'Date Found' in df.columns:
+        df['Age (Days)'] = (pd.Timestamp.now() - df['Date Found']).dt.days
+    else:
+        df['Age (Days)'] = 0
 
-    # Filters row
+    # Normalize status values
+    if 'Status' in df.columns:
+        df['Status'] = df['Status'].str.strip().str.title()
+        df['Status'] = df['Status'].replace({'': 'Open'})
+    else:
+        df['Status'] = 'Open'
+
+    # --- Summary Metrics ---
+    st.subheader("Summary")
+
+    open_count = len(df[df['Status'] == 'Open'])
+    completed_count = len(df[df['Status'] == 'Completed'])
+    deferred_count = len(df[df['Status'] == 'Deferred'])
+    total_actionable = open_count + completed_count
+    completion_rate = (completed_count / total_actionable * 100) if total_actionable > 0 else 0
+
     col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Open", open_count)
+    with col2:
+        st.metric("Completed", completed_count)
+    with col3:
+        st.metric("Deferred", deferred_count)
+    with col4:
+        st.metric("Completion Rate", f"{completion_rate:.0f}%")
+
+    st.divider()
+
+    # --- Filters ---
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        # Issue type filter
-        issue_types = ['All'] + sorted(repairs_df['Issue Type'].unique().tolist())
-        selected_issue = st.selectbox("Issue Type", issue_types)
+        status_options = ['All'] + sorted(df['Status'].unique().tolist())
+        selected_status = st.selectbox("Status", status_options, index=0)
 
     with col2:
-        # Status filter
-        statuses = ['All', 'Complete', 'Not Complete', 'Unknown']
-        selected_status = st.selectbox("Status", statuses)
+        mainlines = ['All'] + sorted([m for m in df['Mainline'].unique() if m and str(m) != 'nan' and str(m).strip()])
+        selected_mainline = st.selectbox("Mainline", mainlines, index=0)
 
     with col3:
-        # Mainline filter
-        mainlines = ['All'] + sorted([m for m in repairs_df['Mainline'].unique() if m and str(m) != 'nan'])
-        selected_mainline = st.selectbox("Mainline", mainlines)
-
-    with col4:
-        # Employee filter
-        employees = ['All'] + sorted([e for e in repairs_df['Employee'].unique() if e and str(e) != 'nan' and e.strip()])
-        selected_employee = st.selectbox("Employee", employees)
+        reporters = ['All'] + sorted([r for r in df['Found By'].unique() if r and str(r) != 'nan' and str(r).strip()])
+        selected_reporter = st.selectbox("Found By", reporters, index=0)
 
     # Apply filters
-    filtered_df = repairs_df.copy()
-
-    if selected_issue != 'All':
-        filtered_df = filtered_df[filtered_df['Issue Type'] == selected_issue]
-
+    filtered = df.copy()
     if selected_status != 'All':
-        if selected_status == 'Unknown':
-            filtered_df = filtered_df[filtered_df['Status'].isna()]
-        else:
-            filtered_df = filtered_df[filtered_df['Status'] == selected_status]
-
+        filtered = filtered[filtered['Status'] == selected_status]
     if selected_mainline != 'All':
-        filtered_df = filtered_df[filtered_df['Mainline'] == selected_mainline]
-
-    if selected_employee != 'All':
-        filtered_df = filtered_df[filtered_df['Employee'] == selected_employee]
-
-    st.divider()
-
-    # Summary metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    with col1:
-        st.metric("Total Issues", len(filtered_df))
-
-    with col2:
-        complete = len(filtered_df[filtered_df['Status'] == 'Complete'])
-        st.metric("Completed", complete)
-
-    with col3:
-        incomplete = len(filtered_df[filtered_df['Status'] == 'Not Complete'])
-        st.metric("Not Complete", incomplete)
-
-    with col4:
-        unknown = len(filtered_df[filtered_df['Status'].isna()])
-        st.metric("Unknown Status", unknown)
-
-    with col5:
-        mainlines_affected = filtered_df['Mainline'].nunique()
-        st.metric("Mainlines", mainlines_affected)
+        filtered = filtered[filtered['Mainline'] == selected_mainline]
+    if selected_reporter != 'All':
+        filtered = filtered[filtered['Found By'] == selected_reporter]
 
     st.divider()
 
-    # Two column layout for charts
+    # --- Open Repairs Table (main action list) ---
+    open_repairs = filtered[filtered['Status'] == 'Open'].copy()
+
+    if not open_repairs.empty:
+        st.subheader(f"Open Repairs ({len(open_repairs)})")
+        st.caption("Sorted by age — oldest items need attention first")
+
+        open_repairs = open_repairs.sort_values('Age (Days)', ascending=False)
+
+        # Color-code by age
+        def age_color(age):
+            if age > 14:
+                return 'background-color: #ff6b6b22'
+            elif age > 7:
+                return 'background-color: #ffa50022'
+            return ''
+
+        display_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description', 'Found By']
+        display_cols = [c for c in display_cols if c in open_repairs.columns]
+        display_df = open_repairs[display_cols].copy()
+
+        if 'Date Found' in display_df.columns:
+            display_df['Date Found'] = display_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+
+        styled = display_df.style.applymap(
+            age_color, subset=['Age (Days)'] if 'Age (Days)' in display_df.columns else []
+        )
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
+    else:
+        if selected_status == 'All' or selected_status == 'Open':
+            st.success("No open repairs!")
+
+    st.divider()
+
+    # --- Charts ---
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
-        st.subheader("Issues by Type")
-        issue_counts = filtered_df['Issue Type'].value_counts()
-        if not issue_counts.empty:
-            st.bar_chart(issue_counts)
+        st.subheader("Repairs by Mainline")
+        open_by_mainline = df[df['Status'] == 'Open'].groupby('Mainline').size().reset_index(name='Count')
+        if not open_by_mainline.empty:
+            open_by_mainline = open_by_mainline.sort_values('Count', ascending=True)
+            fig = px.bar(open_by_mainline, x='Count', y='Mainline', orientation='h',
+                         color='Count', color_continuous_scale=['#4CAF50', '#ff6b6b'])
+            fig.update_layout(height=max(300, len(open_by_mainline) * 25 + 100),
+                              showlegend=False, coloraxis_showscale=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No open repairs to chart")
 
     with chart_col2:
-        st.subheader("Completion Status")
-        status_counts = filtered_df['Status'].fillna('Unknown').value_counts()
-        if not status_counts.empty:
-            st.bar_chart(status_counts)
+        st.subheader("Repairs by Reporter")
+        by_reporter = df[df['Status'] == 'Open'].groupby('Found By').size().reset_index(name='Count')
+        if not by_reporter.empty:
+            by_reporter = by_reporter.sort_values('Count', ascending=True)
+            fig = px.bar(by_reporter, x='Count', y='Found By', orientation='h',
+                         color='Count', color_continuous_scale=['#2196F3', '#1565C0'])
+            fig.update_layout(height=max(300, len(by_reporter) * 30 + 100),
+                              showlegend=False, coloraxis_showscale=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No open repairs to chart")
 
     st.divider()
 
-    # Outstanding repairs section
-    st.subheader("Outstanding Repairs")
-    outstanding = filtered_df[filtered_df['Status'] != 'Complete'].copy()
+    # --- Resolution Metrics ---
+    completed = df[df['Status'] == 'Completed'].copy()
+    if not completed.empty and 'Date Resolved' in completed.columns and 'Date Found' in completed.columns:
+        valid_resolved = completed.dropna(subset=['Date Resolved', 'Date Found'])
+        if not valid_resolved.empty:
+            valid_resolved['Resolution Days'] = (valid_resolved['Date Resolved'] - valid_resolved['Date Found']).dt.days
 
-    if outstanding.empty:
-        st.success("No outstanding repairs in filtered data!")
-    else:
-        # Group by mainline for actionable view
-        st.markdown(f"**{len(outstanding)} repairs need attention:**")
+            st.subheader("Resolution Metrics")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                avg_days = valid_resolved['Resolution Days'].mean()
+                st.metric("Avg Days to Resolve", f"{avg_days:.1f}")
+            with col2:
+                oldest_open = df[df['Status'] == 'Open']['Age (Days)'].max() if open_count > 0 else 0
+                st.metric("Oldest Open Repair", f"{oldest_open} days")
+            with col3:
+                st.metric("Resolved This Month",
+                          len(valid_resolved[valid_resolved['Date Resolved'] >= pd.Timestamp.now().replace(day=1)]))
 
-        # Show by issue type
-        for issue_type in outstanding['Issue Type'].unique():
-            issue_items = outstanding[outstanding['Issue Type'] == issue_type]
+            st.divider()
 
-            with st.expander(f"{issue_type} ({len(issue_items)} items)", expanded=True):
-                display_df = issue_items[['Date', 'Mainline', 'Location', 'Employee', 'Repairs Noted', 'Notes']].copy()
-                display_df['Date'] = display_df['Date'].dt.strftime('%Y-%m-%d') if 'Date' in display_df.columns else ''
+    # --- Completed Repairs ---
+    if not completed.empty:
+        with st.expander(f"Completed Repairs ({len(completed)})"):
+            comp_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
+                         'Date Resolved', 'Resolved By', 'Notes']
+            comp_cols = [c for c in comp_cols if c in completed.columns]
+            comp_display = completed[comp_cols].copy()
+            if 'Date Found' in comp_display.columns:
+                comp_display['Date Found'] = comp_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            if 'Date Resolved' in comp_display.columns:
+                comp_display['Date Resolved'] = comp_display['Date Resolved'].dt.strftime('%Y-%m-%d').fillna('')
+            comp_display = comp_display.sort_values('Date Found', ascending=False) if 'Date Found' in comp_display.columns else comp_display
+            st.dataframe(comp_display, use_container_width=True, hide_index=True)
 
-                # Clean up display
-                display_df = display_df.fillna('')
-                display_df.columns = ['Date', 'Mainline', 'Location', 'Reported By', 'Repair Notes', 'Additional Notes']
+    # --- Deferred Repairs ---
+    deferred = filtered[filtered['Status'] == 'Deferred']
+    if not deferred.empty:
+        with st.expander(f"Deferred Repairs ({len(deferred)})"):
+            def_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description', 'Found By', 'Notes']
+            def_cols = [c for c in def_cols if c in deferred.columns]
+            def_display = deferred[def_cols].copy()
+            if 'Date Found' in def_display.columns:
+                def_display['Date Found'] = def_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            st.dataframe(def_display, use_container_width=True, hide_index=True)
 
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # Recent activity
-    st.subheader("Recent Repair Activity")
-
-    recent = filtered_df.head(20).copy()
-    if not recent.empty:
-        display_cols = ['Date', 'Site', 'Mainline', 'Issue Type', 'Location', 'Status', 'Employee']
-        display_recent = recent[display_cols].copy()
-        display_recent['Date'] = display_recent['Date'].dt.strftime('%Y-%m-%d %H:%M') if 'Date' in display_recent.columns else ''
-        display_recent['Status'] = display_recent['Status'].fillna('Unknown')
-        display_recent = display_recent.fillna('')
-
-        st.dataframe(display_recent, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # Detailed view with all data
-    with st.expander("Full Repair Data"):
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True)
-
-    # Issue type guide
-    with st.expander("Issue Type Guide"):
+    # --- How to Use ---
+    with st.expander("How to use the Repairs Tracker"):
         st.markdown("""
-        **Issue Categories:**
+        **Repairs are auto-populated from TSheets** each day when workers log issues
+        in the "Repairs needed" field.
 
-        - **Tree Damage** - Trees fallen on lines, need chainsaw work
-        - **Spinseal Reweld** - Spinseal connections needing rewelding
-        - **Spinseal Broken** - Broken spinseal components
-        - **Spinseal Issue** - Other spinseal problems
-        - **Needs Stainless** - Areas requiring stainless steel fittings
-        - **Monitor Antenna** - Monitor antenna issues
-        - **Broken Equipment** - Other broken equipment
-        - **General Repair** - Other repairs mentioned
+        **To manage repairs**, open the Google Sheet and go to the `repairs_tracker` tab:
 
-        **Location Markers:**
+        1. **Mark as Completed:** Change the `Status` column from `Open` to `Completed`,
+           fill in `Date Resolved` and optionally `Resolved By`
+        2. **Defer a repair:** Change `Status` to `Deferred` and add a note explaining why
+        3. **Add context:** Use the `Notes` column for any additional information
 
-        - **@MID / Middle** - Middle section of mainline
-        - **@BTM / Bottom** - Bottom section
-        - **Top** - Top section
-        - **Monitor** - At or near monitor location
-        - **Conductor** - At conductor line
-        - **Near End / Beginning** - Distance markers
+        **Tips:**
+        - Use Google Sheets Data Validation on the Status column for a dropdown
+          (Data > Data validation > List: Open, Completed, Deferred)
+        - Sort by Date Found to see the oldest issues first
+        - The dashboard refreshes data every hour or on manual refresh
         """)
