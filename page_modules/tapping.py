@@ -113,13 +113,12 @@ def render(personnel_df, vacuum_df):
 
     # SITE-WIDE EFFICIENCY METRICS
     st.divider()
-    st.subheader("💰 Site-Wide Efficiency")
+    st.subheader("⏱️ Site-Wide Efficiency")
 
     total_hours = df['Hours'].sum()
-    total_labor_cost = df['Labor_Cost'].sum()
     total_taps = df['Taps_In'].sum()
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         avg_taps_per_hour = total_taps / total_hours if total_hours > 0 else 0
@@ -130,11 +129,7 @@ def render(personnel_df, vacuum_df):
         st.metric("Avg Minutes/Tap", f"{avg_mins_per_tap:.1f}")
 
     with col3:
-        avg_cost_per_tap = total_labor_cost / total_taps if total_taps > 0 else 0
-        st.metric("Avg Cost/Tap", f"${avg_cost_per_tap:.2f}")
-
-    with col4:
-        st.metric("Total Labor Cost", f"${total_labor_cost:,.2f}")
+        st.metric("Total Hours", f"{total_hours:,.1f}")
 
     st.divider()
 
@@ -147,11 +142,15 @@ def render(personnel_df, vacuum_df):
     with col1:
         time_range = st.selectbox(
             "Time Range",
-            ["Last 7 Days", "Last 30 Days", "This Season", "Custom Range"]
+            ["This Season", "Previous Day", "Last 7 Days", "Last 30 Days", "Custom Range"]
         )
 
     # Apply time filter
-    if time_range == "Last 7 Days":
+    if time_range == "Previous Day":
+        yesterday = (datetime.now() - timedelta(days=1)).date()
+        filtered_df = df[df['Date'].dt.date == yesterday]
+        st.info(f"Showing data for **{yesterday}** — review for data errors or performance issues")
+    elif time_range == "Last 7 Days":
         cutoff = datetime.now() - timedelta(days=7)
         filtered_df = df[df['Date'] >= cutoff]
     elif time_range == "Last 30 Days":
@@ -328,19 +327,19 @@ def render(personnel_df, vacuum_df):
         # Calculate overall metrics
         productivity['Overall_Taps_Per_Hour'] = (productivity['Taps_In'] / productivity['Hours']).round(1)
         productivity['Overall_Taps_Per_Hour'] = productivity['Overall_Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
-        
-        productivity['Cost_Per_Tap'] = (productivity['Labor_Cost'] / productivity['Taps_In']).round(2)
-        productivity['Cost_Per_Tap'] = productivity['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-        
+
+        productivity['Overall_Min_Per_Tap'] = ((productivity['Hours'] * 60) / productivity['Taps_In']).round(1)
+        productivity['Overall_Min_Per_Tap'] = productivity['Overall_Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+
         # Sort by total taps
         productivity = productivity.sort_values('Taps_In', ascending=False)
         productivity = productivity[productivity['Taps_In'] > 0]
-        
+
         if not productivity.empty:
             # Build display columns
-            display_cols = ['Employee']
-            col_names = ['Employee']
-            
+            display_cols = ['Employee', 'Taps_In', 'Overall_Min_Per_Tap']
+            col_names = ['Employee', 'Total Taps', 'Min/Tap']
+
             # Add job code columns - names are already normalized
             for job_code in job_codes_to_show:
                 if job_code in productivity.columns:
@@ -348,41 +347,29 @@ def render(personnel_df, vacuum_df):
                     # Capitalize for display
                     display_name = job_code.title() if job_code else job_code
                     col_names.append(display_name)
-            
-            # Add totals
-            display_cols.extend(['Taps_In', 'Hours', 'Overall_Taps_Per_Hour', 'Cost_Per_Tap', 'Labor_Cost'])
-            col_names.extend(['Total Taps', 'Hours', 'Overall Taps/Hr', '$/Tap', 'Total Cost'])
-            
+
+            # Add hours and taps/hr
+            display_cols.extend(['Hours', 'Overall_Taps_Per_Hour'])
+            col_names.extend(['Hours', 'Taps/Hr'])
+
             display = productivity[display_cols].copy()
             display.columns = col_names
-            
-            # Format currency
-            if '$/Tap' in display.columns:
-                display['$/Tap'] = display['$/Tap'].apply(lambda x: f"${x:.2f}" if pd.notna(x) else "N/A")
-            if 'Total Cost' in display.columns:
-                display['Total Cost'] = display['Total Cost'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "N/A")
-            
+
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
-            
+
             # Summary stats
-            col1, col2, col3, col4 = st.columns(4)
-            
+            col1, col2, col3 = st.columns(3)
+
             with col1:
                 st.metric("Employees Tracked", len(productivity))
-            
+
             with col2:
                 avg_taps_hr = productivity['Overall_Taps_Per_Hour'].mean()
                 st.metric("Avg Taps/Hour", f"{avg_taps_hr:.1f}")
-            
+
             with col3:
-                # Get average for first job code shown
-                if len(job_codes_to_show) > 0 and job_codes_to_show[0] in productivity.columns:
-                    avg_mins = productivity[job_codes_to_show[0]].mean()
-                    st.metric(f"Avg Min/Tap ({job_codes_to_show[0][:15]})", f"{avg_mins:.1f}")
-            
-            with col4:
-                avg_cost = productivity['Cost_Per_Tap'].mean()
-                st.metric("Avg Cost/Tap", f"${avg_cost:.2f}")
+                avg_min = productivity['Overall_Min_Per_Tap'].mean()
+                st.metric("Avg Min/Tap", f"{avg_min:.1f}")
         else:
             st.info("No productivity data for selected time range")
     else:
@@ -403,19 +390,13 @@ def render(personnel_df, vacuum_df):
         emp_stats['Minutes_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
         emp_stats['Minutes_Per_Tap'] = emp_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
         
-        emp_stats['Cost_Per_Tap'] = (emp_stats['Labor_Cost'] / emp_stats['Taps_In']).round(2)
-        emp_stats['Cost_Per_Tap'] = emp_stats['Cost_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-        
         emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
         emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
-        
+
         if not emp_stats.empty:
-            display = emp_stats[['Employee', 'Taps_In', 'Hours', 'Taps_Per_Hour', 'Minutes_Per_Tap', 'Cost_Per_Tap', 'Labor_Cost']].copy()
-            display.columns = ['Employee', 'Taps', 'Hours', 'Taps/Hr', 'Min/Tap', '$/Tap', 'Total Cost']
-            
-            display['$/Tap'] = display['$/Tap'].apply(lambda x: f"${x:.2f}")
-            display['Total Cost'] = display['Total Cost'].apply(lambda x: f"${x:,.2f}")
-            
+            display = emp_stats[['Employee', 'Taps_In', 'Minutes_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
+            display.columns = ['Employee', 'Taps', 'Min/Tap', 'Hours', 'Taps/Hr']
+
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
     st.divider()
