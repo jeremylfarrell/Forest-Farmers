@@ -357,7 +357,7 @@ def load_data(days_to_load):
     with st.spinner('Loading data from Google Sheets...'):
         try:
             vacuum_df = load_all_vacuum_data(ny_vacuum_url, vt_vacuum_url, credentials, days=days_to_load)
-            personnel_df = load_all_personnel_data(personnel_url, credentials, days=days_to_load)
+            personnel_df = load_all_personnel_data(personnel_url, credentials)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
