@@ -289,36 +289,27 @@ def process_vacuum_data(df):
     
     # Process each timestamp column found
     for timestamp_col in timestamp_columns:
-        # First, try to convert to numeric (handles both actual numbers and numeric strings)
-        numeric_attempt = pd.to_numeric(df[timestamp_col], errors='coerce')
-        
-        # Check if we got valid numeric values (Excel serial dates)
-        if numeric_attempt.notna().any():
-            # We have numeric values - treat as potential Excel serial dates
-            # Filter out invalid values (negative, zero, or unreasonably large)
-            # Valid Excel dates are typically between 1 and 100000 (years 1900-2173)
-            numeric_attempt = numeric_attempt.apply(
-                lambda x: x if (pd.notna(x) and 0 < x < 100000) else None
-            )
-            
-            # Convert Excel serial dates to datetime
-            from datetime import datetime as dt, timedelta
-            
-            def excel_to_datetime(excel_date):
-                if pd.isna(excel_date):
-                    return pd.NaT
-                try:
-                    # Excel epoch is December 30, 1899
+        from datetime import datetime as dt, timedelta
+
+        def parse_mixed_timestamp(val):
+            """Handle mixed columns: numeric Excel serial dates AND string datetimes."""
+            if pd.isna(val) or val == '':
+                return pd.NaT
+            # Try numeric (Excel serial date) first
+            try:
+                num = float(val)
+                if 0 < num < 100000:
                     epoch = dt(1899, 12, 30)
-                    # Add the number of days
-                    return epoch + timedelta(days=float(excel_date))
-                except:
-                    return pd.NaT
-            
-            df[timestamp_col] = numeric_attempt.apply(excel_to_datetime)
-        else:
-            # Not numeric - try regular datetime parsing (for string dates)
-            df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
+                    return epoch + timedelta(days=num)
+            except (ValueError, TypeError):
+                pass
+            # Fall back to string datetime parsing
+            try:
+                return pd.to_datetime(val)
+            except Exception:
+                return pd.NaT
+
+        df[timestamp_col] = df[timestamp_col].apply(parse_mixed_timestamp)
     
     # Use the first valid timestamp column for primary Timestamp field
     if timestamp_columns:
