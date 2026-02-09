@@ -489,11 +489,12 @@ def render(vacuum_df, personnel_df):
         </div>
         """
 
-        # Add smaller vacuum circle marker
+        # Add smaller vacuum circle marker with sensor name tooltip
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
             radius=max(3, marker_size - 3),  # Smaller radius
             popup=folium.Popup(popup_html, max_width=300),
+            tooltip=row['Sensor'],
             color=color,
             fill=True,
             fillColor=color,
@@ -548,6 +549,18 @@ def render(vacuum_df, personnel_df):
 
     # Display map - use returned_objects=[] to prevent refreshes on every click
     st_folium(m, width=None, height=600, returned_objects=[])
+
+    st.divider()
+
+    # ========================================================================
+    # REPAIRS NEEDING ATTENTION MAP
+    # ========================================================================
+
+    st.subheader("🔧 Repairs Needing Attention")
+    st.markdown("*Lines with reported repairs that have no subsequent fix logged*")
+
+    # Build repairs map from personnel data
+    _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon)
 
     st.divider()
 
@@ -694,3 +707,209 @@ def render(vacuum_df, personnel_df):
         - Screenshot map for crew navigation
         - Compare maps between sites for patterns
         """)
+
+
+def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon):
+    """
+    Render a second map showing mainlines with unresolved repairs.
+    Red = repairs reported but no subsequent fix job logged.
+    Green = repairs reported AND a fix was logged after.
+    Gray = no repairs reported.
+    """
+    if personnel_df.empty or map_data.empty:
+        st.info("No data available for repairs map")
+        return
+
+    # Find columns
+    mainline_col = None
+    for col in personnel_df.columns:
+        if 'mainline' in col.lower():
+            mainline_col = col
+            break
+
+    date_col = 'Date' if 'Date' in personnel_df.columns else None
+    job_col = None
+    for col in personnel_df.columns:
+        if col.lower() in ('job', 'job code', 'jobcode'):
+            job_col = col
+            break
+
+    repairs_col = None
+    for col in personnel_df.columns:
+        if 'repairs needed' in col.lower() or col == 'Repairs needed':
+            repairs_col = col
+            break
+
+    if not all([mainline_col, date_col, repairs_col]):
+        st.info("Required columns not found for repairs analysis")
+        return
+
+    df = personnel_df.copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    df = df.dropna(subset=[date_col])
+
+    # Find mainlines with text repair descriptions (not just numeric 0)
+    def has_repair_text(val):
+        if pd.isna(val) or val == '' or val is None:
+            return False
+        s = str(val).strip()
+        if not s:
+            return False
+        try:
+            float(s)
+            return False  # Pure number, not a description
+        except ValueError:
+            return True
+
+    repair_rows = df[df[repairs_col].apply(has_repair_text)].copy()
+
+    if repair_rows.empty:
+        st.info("No repair descriptions found in personnel data")
+        return
+
+    # For each mainline with repairs, check if there's a subsequent "fixing identified tubing"
+    # or similar fix job code entry
+    def is_fix_job(job_text):
+        if pd.isna(job_text):
+            return False
+        j = str(job_text).lower()
+        return any(kw in j for kw in [
+            'fixing identified tubing',
+            'already identified tubing',
+            'tubing repair',
+            'tubing issue',
+            'fix identified',
+        ])
+
+    # Get the latest repair date per mainline
+    mainline_repairs = repair_rows.groupby(mainline_col).agg({
+        date_col: 'max',
+        repairs_col: 'last'
+    }).reset_index()
+    mainline_repairs.columns = ['Mainline', 'Last_Repair_Date', 'Last_Repair_Desc']
+
+    # Check for fix jobs after each repair
+    repair_status = {}  # mainline -> {'status': 'unresolved'|'resolved', 'repair_date', 'description'}
+
+    for _, row in mainline_repairs.iterrows():
+        mainline = row['Mainline']
+        repair_date = row['Last_Repair_Date']
+        desc = row['Last_Repair_Desc']
+
+        if pd.isna(mainline) or not str(mainline).strip():
+            continue
+
+        # Look for fix jobs on this mainline after the repair date
+        if job_col:
+            fix_entries = df[
+                (df[mainline_col] == mainline) &
+                (df[date_col] > repair_date) &
+                (df[job_col].apply(is_fix_job))
+            ]
+            has_fix = not fix_entries.empty
+        else:
+            has_fix = False
+
+        repair_status[mainline] = {
+            'status': 'resolved' if has_fix else 'unresolved',
+            'repair_date': repair_date,
+            'description': str(desc)[:100],
+        }
+
+    if not repair_status:
+        st.info("No repairs to map")
+        return
+
+    # Count stats
+    unresolved = sum(1 for v in repair_status.values() if v['status'] == 'unresolved')
+    resolved = sum(1 for v in repair_status.values() if v['status'] == 'resolved')
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Unresolved", unresolved)
+    with col2:
+        st.metric("Resolved", resolved)
+    with col3:
+        st.metric("Total Lines with Repairs", len(repair_status))
+
+    # Build the repairs map
+    m2 = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=13,
+        tiles=tiles,
+        attr=attr
+    )
+
+    # Legend
+    legend_html = '''
+    <div style="position: fixed;
+                top: 10px; right: 10px; width: 180px; height: auto;
+                background-color: white; border:2px solid grey; z-index:9999;
+                font-size:14px; padding: 10px; border-radius: 5px;">
+    <p style="margin: 0; font-weight: bold; text-align: center;">Repair Status</p>
+    <p style="margin: 5px 0;"><span style="color: #e74c3c; font-size: 20px;">&#9679;</span> Needs Fix</p>
+    <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> Fix Logged</p>
+    <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Repairs</p>
+    </div>
+    '''
+    m2.get_root().html.add_child(folium.Element(legend_html))
+
+    sensor_names = map_data['Sensor'].tolist()
+
+    for _, row in map_data.iterrows():
+        sensor = row['Sensor']
+
+        # Try to match sensor to a mainline with repair info
+        matched_mainline = None
+        for mainline in repair_status:
+            matched = match_mainline_to_sensor(mainline, [sensor])
+            if matched:
+                matched_mainline = mainline
+                break
+
+        if matched_mainline and matched_mainline in repair_status:
+            info = repair_status[matched_mainline]
+            if info['status'] == 'unresolved':
+                color = '#e74c3c'  # red
+                status_text = 'Needs Fix'
+            else:
+                color = '#27ae60'  # green
+                status_text = 'Fix Logged'
+
+            date_str = ''
+            if pd.notna(info['repair_date']):
+                try:
+                    date_str = info['repair_date'].strftime('%Y-%m-%d')
+                except:
+                    date_str = str(info['repair_date'])[:10]
+
+            popup_html = f"""
+            <div style="font-family: Arial; min-width: 200px;">
+                <h4 style="margin: 0 0 5px 0;">{sensor}</h4>
+                <p style="margin: 3px 0;"><b>Status:</b> {status_text}</p>
+                <p style="margin: 3px 0;"><b>Repair Date:</b> {date_str}</p>
+                <p style="margin: 3px 0;"><b>Description:</b> {info['description']}</p>
+            </div>
+            """
+        else:
+            color = '#bdc3c7'  # gray - no repairs
+            popup_html = f"""
+            <div style="font-family: Arial;">
+                <h4 style="margin: 0 0 5px 0;">{sensor}</h4>
+                <p>No repairs reported</p>
+            </div>
+            """
+
+        folium.CircleMarker(
+            location=[row['Latitude'], row['Longitude']],
+            radius=8,
+            popup=folium.Popup(popup_html, max_width=300),
+            tooltip=sensor,
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.8,
+            weight=2
+        ).add_to(m2)
+
+    st_folium(m2, width=None, height=600, returned_objects=[])
