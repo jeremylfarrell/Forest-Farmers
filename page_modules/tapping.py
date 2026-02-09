@@ -253,9 +253,8 @@ def render(personnel_df, vacuum_df):
     # ========================================================================
 
     st.subheader("👥 Employee Productivity")
-    
-    st.markdown("**Minutes per tap by job type:**")
-    st.caption("Shows time efficiency for tapping and repair work")
+
+    st.markdown("**Tapping job codes only** — hours, taps/hr, and min/tap reflect only tapping work")
 
     # Normalize job codes to combine similar ones
     def normalize_job_code(job_code):
@@ -265,7 +264,7 @@ def render(personnel_df, vacuum_df):
             return job_code
         name = str(job_code)
         # Remove state codes and numbers like "NY 240114", "- NY - 240114", "VT 240113"
-        name = re.sub(r'\s*-?\s*(NY|VT|ny|vt)\s*-?\s*\d+', '', name)
+        name = re.sub(r'\s*-?\s*-?\s*(NY|VT|ny|vt)\s*-?\s*\d+', '', name)
         # Extract text in parentheses if present, otherwise use cleaned name
         if '(' in name and ')' in name:
             paren_text = name[name.find('(')+1:name.find(')')]
@@ -274,86 +273,49 @@ def render(personnel_df, vacuum_df):
         name = re.sub(r'^Maple\s*[Tt]apping\s*-?\s*', '', name)
         return name.strip().lower() if name.strip() else job_code.lower()
 
+    def is_tapping_job(job_normalized):
+        """Return True if this is a tapping job code (not storm repair, not general repair)"""
+        if pd.isna(job_normalized):
+            return False
+        j = str(job_normalized).lower()
+        # Exclude storm repair and non-tapping jobs
+        if 'storm' in j:
+            return False
+        # Include tapping-related job codes
+        return any(kw in j for kw in ['tap', 'spout', 'install'])
+
     # Create normalized job code column
     filtered_df = filtered_df.copy()
     filtered_df['Job_Code_Normalized'] = filtered_df['Job_Code'].apply(normalize_job_code)
+    filtered_df['Is_Tapping'] = filtered_df['Job_Code_Normalized'].apply(is_tapping_job)
 
-    # Calculate minutes per tap by NORMALIZED job type for each employee
-    emp_job_stats = filtered_df.groupby(['Employee', 'Job_Code_Normalized']).agg({
-        'Hours': 'sum',
-        'Taps_In': 'sum'
-    }).reset_index()
+    # Filter to only tapping job codes for productivity metrics
+    tapping_df = filtered_df[filtered_df['Is_Tapping']].copy()
 
-    # Calculate minutes per tap
-    emp_job_stats['Minutes_Per_Tap'] = ((emp_job_stats['Hours'] * 60) / emp_job_stats['Taps_In']).round(1)
-    emp_job_stats['Minutes_Per_Tap'] = emp_job_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-
-    # Filter to relevant job codes
-    job_codes_to_show = []
-
-    # Find tapping job codes (case insensitive)
-    tapping_jobs = emp_job_stats[
-        emp_job_stats['Job_Code_Normalized'].str.lower().str.contains('tap|spout|install', na=False, case=False)
-    ]['Job_Code_Normalized'].unique()
-    job_codes_to_show.extend(tapping_jobs)
-
-    # Find repair job codes
-    repair_jobs = emp_job_stats[
-        emp_job_stats['Job_Code_Normalized'].str.lower().str.contains('repair|tubing|fixing', na=False, case=False)
-    ]['Job_Code_Normalized'].unique()
-    job_codes_to_show.extend(repair_jobs)
-    
-    # Remove duplicates from job_codes_to_show
-    job_codes_to_show = list(dict.fromkeys(job_codes_to_show))
-
-    if len(job_codes_to_show) > 0:
-        # Pivot to show job codes as columns (using normalized names)
-        pivot = emp_job_stats[emp_job_stats['Job_Code_Normalized'].isin(job_codes_to_show)].pivot(
-            index='Employee',
-            columns='Job_Code_Normalized',
-            values='Minutes_Per_Tap'
-        ).reset_index()
-        
-        # Add total taps and hours
-        emp_totals = filtered_df.groupby('Employee').agg({
+    if not tapping_df.empty:
+        # Aggregate by employee — only tapping hours
+        emp_stats = tapping_df.groupby('Employee').agg({
             'Taps_In': 'sum',
             'Hours': 'sum',
-            'Labor_Cost': 'sum'
         }).reset_index()
-        
-        # Merge
-        productivity = pivot.merge(emp_totals, on='Employee', how='left')
-        
-        # Calculate overall metrics
-        productivity['Overall_Taps_Per_Hour'] = (productivity['Taps_In'] / productivity['Hours']).round(1)
-        productivity['Overall_Taps_Per_Hour'] = productivity['Overall_Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
 
-        productivity['Overall_Min_Per_Tap'] = ((productivity['Hours'] * 60) / productivity['Taps_In']).round(1)
-        productivity['Overall_Min_Per_Tap'] = productivity['Overall_Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
+        # Calculate productivity metrics using only tapping hours
+        emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
+        emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
 
-        # Sort by total taps
-        productivity = productivity.sort_values('Taps_In', ascending=False)
-        productivity = productivity[productivity['Taps_In'] > 0]
+        emp_stats['Min_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
+        emp_stats['Min_Per_Tap'] = emp_stats['Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
 
-        if not productivity.empty:
-            # Build display columns
-            display_cols = ['Employee', 'Taps_In', 'Overall_Min_Per_Tap']
-            col_names = ['Employee', 'Total Taps', 'Min/Tap']
+        # Sort by total taps, filter to employees who actually tapped
+        emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
+        emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
 
-            # Add job code columns - names are already normalized
-            for job_code in job_codes_to_show:
-                if job_code in productivity.columns:
-                    display_cols.append(job_code)
-                    # Capitalize for display
-                    display_name = job_code.title() if job_code else job_code
-                    col_names.append(display_name)
+        if not emp_stats.empty:
+            display = emp_stats[['Employee', 'Taps_In', 'Min_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
+            display.columns = ['Employee', 'Total Taps', 'Min/Tap', 'Tapping Hours', 'Taps/Hr']
 
-            # Add hours and taps/hr
-            display_cols.extend(['Hours', 'Overall_Taps_Per_Hour'])
-            col_names.extend(['Hours', 'Taps/Hr'])
-
-            display = productivity[display_cols].copy()
-            display.columns = col_names
+            # Format hours
+            display['Tapping Hours'] = display['Tapping Hours'].apply(lambda x: f"{x:.1f}")
 
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
@@ -361,84 +323,50 @@ def render(personnel_df, vacuum_df):
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.metric("Employees Tracked", len(productivity))
+                st.metric("Employees Tracked", len(emp_stats))
 
             with col2:
-                avg_taps_hr = productivity['Overall_Taps_Per_Hour'].mean()
-                st.metric("Avg Taps/Hour", f"{avg_taps_hr:.1f}")
+                total_tapping_taps = emp_stats['Taps_In'].sum()
+                total_tapping_hours = emp_stats['Hours'].sum()
+                overall_taps_hr = total_tapping_taps / total_tapping_hours if total_tapping_hours > 0 else 0
+                st.metric("Avg Taps/Hour", f"{overall_taps_hr:.1f}")
 
             with col3:
-                avg_min = productivity['Overall_Min_Per_Tap'].mean()
-                st.metric("Avg Min/Tap", f"{avg_min:.1f}")
+                overall_min = (total_tapping_hours * 60) / total_tapping_taps if total_tapping_taps > 0 else 0
+                st.metric("Avg Min/Tap", f"{overall_min:.1f}")
         else:
-            st.info("No productivity data for selected time range")
+            st.info("No tapping productivity data for selected time range")
     else:
-        # Fallback to simple view if no job codes found
-        st.info("Job code information not available - showing basic productivity metrics")
-        
-        # Aggregate by employee
-        emp_stats = filtered_df.groupby('Employee').agg({
-            'Taps_In': 'sum',
-            'Hours': 'sum',
-            'Labor_Cost': 'sum'
-        }).reset_index()
-        
-        # Calculate productivity metrics
-        emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
-        emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
-        
-        emp_stats['Minutes_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
-        emp_stats['Minutes_Per_Tap'] = emp_stats['Minutes_Per_Tap'].replace([float('inf'), float('-inf')], 0)
-        
-        emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
-        emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
-
-        if not emp_stats.empty:
-            display = emp_stats[['Employee', 'Taps_In', 'Minutes_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
-            display.columns = ['Employee', 'Taps', 'Min/Tap', 'Hours', 'Taps/Hr']
-
-            st.dataframe(display, use_container_width=True, hide_index=True, height=400)
+        st.info("No tapping job codes found in selected time range")
 
     st.divider()
 
     # Tips with updated context
     with st.expander("💡 Understanding Tapping Metrics"):
         st.markdown("""
-        **What's New:**
-        
-        - **Site-Wide Efficiency**: Renamed from "Company-Wide" to better reflect overall operation metrics
-        - **Minutes/Tap by Job Type**: Now shows time efficiency for different types of work:
-          - Tapping (new tap installation)
-          - Inseason Repairs (fixing issues during season)
-          - Already Identified Tubing Issues (known problem repairs)
-        - **Removed Site Breakdown**: Simplified view focuses on overall efficiency
-        
         **Key Metrics Explained:**
 
         - **Taps Installed**: New taps put into trees
         - **Taps Removed**: Old taps taken out
         - **Taps Capped**: Taps that were capped off (end of season or non-productive)
         - **Net Change**: Taps Installed - Taps Removed (overall system growth/shrinkage)
-        - **Minutes Per Tap**: Time efficiency by job type (lower = faster work)
-        - **Taps Per Hour**: Overall productivity metric (higher = more efficient)
-        - **Cost Per Tap**: Labor cost efficiency (lower = more cost-effective)
+        - **Minutes Per Tap**: Time efficiency for tapping work only (lower = faster)
+        - **Taps Per Hour**: Productivity metric for tapping work only (higher = more efficient)
+        - **Tapping Hours**: Only hours spent in tapping job codes (excludes repairs, storm, etc.)
 
         **Good Productivity Rates:**
         - Beginner: 15-25 taps/hour (2.4-4 minutes/tap)
         - Experienced: 30-50 taps/hour (1.2-2 minutes/tap)
         - Expert: 50+ taps/hour (<1.2 minutes/tap)
-        
-        **Note:** Repair work typically takes longer per tap than new installations
 
-        **Using Job Type Breakdown:**
-        - Compare tapping efficiency vs repair efficiency
-        - Identify employees who excel at specific tasks
-        - Plan crew assignments based on skill sets
-        - Track if repair times improve with experience
+        **Time Range Options:**
+        - **This Season**: Full season overview (default)
+        - **Previous Day**: Review yesterday's work for data errors or performance issues
+        - **Last 7/30 Days**: Recent activity windows
+        - **Custom Range**: Pick specific dates
 
         **Tips for Analysis:**
         - Track improvement over season as crew gains experience
         - Compare employees for training opportunities
-        - Monitor cost per tap to control labor expenses
-        - Different job types naturally have different time requirements
+        - Use "Previous Day" to catch data entry issues early
         """)
