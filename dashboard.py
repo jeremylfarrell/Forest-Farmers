@@ -473,7 +473,7 @@ def main():
     elif page == "🌳 Tapping Operations":
         tapping.render(personnel_df, vacuum_df)
     elif page == "👥 Employee Performance":
-        employees.render(personnel_df)
+        employees.render(personnel_df, site_filter)
     elif page == "⭐ Leak Checking":
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":

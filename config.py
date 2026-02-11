@@ -41,6 +41,12 @@ PROBLEM_AREAS_COUNT = 15
 # Minimum hours threshold for employee performance calculation
 MIN_HOURS_FOR_RANKING = 5.0
 
+# Tapping targets by site
+TAP_TARGETS = {"NY": 102000, "VT": 49000}
+
+# Overtime threshold (hours per week)
+OVERTIME_THRESHOLD = 52
+
 # Auto-refresh interval (seconds) - set to None to disable
 AUTO_REFRESH_SECONDS = 300  # 5 minutes
 

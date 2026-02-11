@@ -190,6 +190,9 @@ def render(vacuum_df, personnel_df):
     else:
         latest = vacuum_df.groupby(sensor_col).first().reset_index()
 
+    # Filter out birch sensors and relays
+    latest = latest[~latest[sensor_col].str.contains('birch|relay', case=False, na=False)]
+
     # Clean data
     map_data = latest[[sensor_col, lat_col, lon_col]].copy()
     if vacuum_col:
@@ -261,13 +264,7 @@ def render(vacuum_df, personnel_df):
             color_by = "Site" if has_site else None
 
     with col3:
-        marker_size = st.slider(
-            "Marker Size",
-            min_value=5,
-            max_value=15,
-            value=8,
-            help="Size of markers on map"
-        )
+        st.caption("Dot size reflects tap count")
 
     # Collect all dates and employees from installations first
     all_employees = set()
@@ -405,6 +402,9 @@ def render(vacuum_df, personnel_df):
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
 
+    # Calculate max taps for dot scaling
+    max_taps_value = map_data['Taps'].max() if map_data['Taps'].max() > 0 else 1
+
     # Add markers
     for idx, row in map_data.iterrows():
         # Determine marker color
@@ -489,10 +489,14 @@ def render(vacuum_df, personnel_df):
         </div>
         """
 
-        # Add smaller vacuum circle marker with sensor name tooltip
+        # Scale dot size by tap count: min 4 (0 taps) to max 18 (highest)
+        tap_ratio = tap_count / max_taps_value
+        dot_radius = 4 + tap_ratio * 14  # 4 to 18
+
+        # Add circle marker with sensor name tooltip
         folium.CircleMarker(
             location=[row['Latitude'], row['Longitude']],
-            radius=max(3, marker_size - 3),  # Smaller radius
+            radius=dot_radius,
             popup=folium.Popup(popup_html, max_width=300),
             tooltip=row['Sensor'],
             color=color,

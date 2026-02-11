@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
 from utils import find_column
+import config
 
 
 def render(personnel_df, vacuum_df):
@@ -110,6 +111,65 @@ def render(personnel_df, vacuum_df):
     with col5:
         total_repairs = df['Repairs'].sum()
         st.metric("Repairs Needed", f"{int(total_repairs):,}")
+
+    # ========================================================================
+    # TAPPING COMPLETION ESTIMATE
+    # ========================================================================
+    st.divider()
+    st.subheader("🎯 Tapping Progress")
+
+    def _render_tap_progress(tap_df, site_label, target):
+        """Render progress bar and estimate for one site"""
+        taps_installed = int(tap_df['Taps_In'].sum())
+        pct = min(taps_installed / target, 1.0) if target > 0 else 0
+        remaining = max(target - taps_installed, 0)
+
+        # Calculate avg taps per day over last 5 tapping days
+        daily_taps = tap_df.groupby(tap_df['Date'].dt.date)['Taps_In'].sum()
+        tapping_days = daily_taps[daily_taps > 0].sort_index(ascending=False).head(5)
+        avg_per_day = tapping_days.mean() if len(tapping_days) > 0 else 0
+
+        # Estimate completion
+        if avg_per_day > 0 and remaining > 0:
+            days_left = int(remaining / avg_per_day)
+            est_date = (datetime.now() + timedelta(days=days_left)).strftime('%b %d, %Y')
+        elif remaining == 0:
+            est_date = "Complete!"
+        else:
+            est_date = "N/A"
+
+        st.markdown(f"**{site_label}**")
+        st.progress(pct)
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Installed / Target", f"{taps_installed:,} / {target:,}")
+        with c2:
+            st.metric("% Complete", f"{pct*100:.1f}%")
+        with c3:
+            st.metric("Avg Taps/Day (last 5)", f"{avg_per_day:,.0f}" if avg_per_day > 0 else "N/A")
+        with c4:
+            st.metric("Est. Completion", est_date)
+
+    tap_targets = config.TAP_TARGETS
+    viewing_all = has_site and len(df['Site'].unique()) > 1
+
+    if viewing_all:
+        # Show both sites side by side
+        col_ny, col_vt = st.columns(2)
+        with col_ny:
+            ny_df = df[df['Site'] == 'NY'] if 'Site' in df.columns else df
+            _render_tap_progress(ny_df, "🟦 New York", tap_targets.get("NY", 0))
+        with col_vt:
+            vt_df = df[df['Site'] == 'VT'] if 'Site' in df.columns else df
+            _render_tap_progress(vt_df, "🟩 Vermont", tap_targets.get("VT", 0))
+    elif has_site and len(df['Site'].unique()) == 1:
+        site_code = df['Site'].iloc[0]
+        site_label = "🟦 New York" if site_code == "NY" else "🟩 Vermont" if site_code == "VT" else site_code
+        _render_tap_progress(df, site_label, tap_targets.get(site_code, 0))
+    else:
+        # No site info — use combined target
+        combined_target = sum(tap_targets.values())
+        _render_tap_progress(df, "All Sites", combined_target)
 
     # SITE-WIDE EFFICIENCY METRICS
     st.divider()
