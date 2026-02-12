@@ -329,7 +329,10 @@ def render(personnel_df, vacuum_df):
                 margins=True,
                 margins_name='Total'
             )
-            pivot = pivot.sort_index(ascending=False)
+            # Sort dates descending but keep Total row at top
+            total_row = pivot.loc[['Total']]
+            date_rows = pivot.drop('Total').sort_index(ascending=False)
+            pivot = pd.concat([total_row, date_rows])
 
             # Convert to int for cleaner display
             pivot = pivot.astype(int)
