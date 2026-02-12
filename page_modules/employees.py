@@ -226,10 +226,16 @@ def render(personnel_df, site_filter="All Sites"):
                 st.metric("Total Hours", "N/A")
 
         with col2:
-            if hours_col:
-                st.metric("Avg Hours/Day", f"{emp_data[hours_col].mean():.1f}h")
+            if hours_col and date_col:
+                # Avg hours per week (Mon 12am - Sun midnight)
+                emp_dates = pd.to_datetime(emp_data[date_col], errors='coerce')
+                emp_data_copy = emp_data.copy()
+                emp_data_copy['_week'] = emp_dates.dt.isocalendar().week.astype(str) + '-' + emp_dates.dt.isocalendar().year.astype(str)
+                weekly_hours = emp_data_copy.groupby('_week')[hours_col].sum()
+                avg_weekly = weekly_hours.mean() if len(weekly_hours) > 0 else 0
+                st.metric("Avg Hours/Week", f"{avg_weekly:.1f}h")
             else:
-                st.metric("Avg Hours/Day", "N/A")
+                st.metric("Avg Hours/Week", "N/A")
 
         with col3:
             if has_site:

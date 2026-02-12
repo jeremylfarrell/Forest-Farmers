@@ -124,12 +124,13 @@ def render(personnel_df, vacuum_df):
         pct = min(taps_installed / target, 1.0) if target > 0 else 0
         remaining = max(target - taps_installed, 0)
 
-        # Calculate avg taps per day over last 5 tapping days
-        daily_taps = tap_df.groupby(tap_df['Date'].dt.date)['Taps_In'].sum()
-        tapping_days = daily_taps[daily_taps > 0].sort_index(ascending=False).head(5)
-        avg_per_day = tapping_days.mean() if len(tapping_days) > 0 else 0
+        # Calculate avg taps per day over last 7 calendar days (includes days off)
+        seven_days_ago = (datetime.now() - timedelta(days=7)).date()
+        recent = tap_df[tap_df['Date'].dt.date >= seven_days_ago]
+        total_recent_taps = recent['Taps_In'].sum()
+        avg_per_day = total_recent_taps / 7 if not recent.empty else 0
 
-        # Estimate completion
+        # Estimate completion (every day is a possible tapping day)
         if avg_per_day > 0 and remaining > 0:
             days_left = int(remaining / avg_per_day)
             est_date = (datetime.now() + timedelta(days=days_left)).strftime('%b %d, %Y')
@@ -146,7 +147,7 @@ def render(personnel_df, vacuum_df):
         with c2:
             st.metric("% Complete", f"{pct*100:.1f}%")
         with c3:
-            st.metric("Avg Taps/Day (last 5)", f"{avg_per_day:,.0f}" if avg_per_day > 0 else "N/A")
+            st.metric("Avg Taps/Day (7d)", f"{avg_per_day:,.0f}" if avg_per_day > 0 else "N/A")
         with c4:
             st.metric("Est. Completion", est_date)
 
@@ -171,25 +172,37 @@ def render(personnel_df, vacuum_df):
         combined_target = sum(tap_targets.values())
         _render_tap_progress(df, "All Sites", combined_target)
 
-    # SITE-WIDE EFFICIENCY METRICS
+    # SITE-WIDE EFFICIENCY METRICS (tapping job codes only)
     st.divider()
     st.subheader("⏱️ Site-Wide Efficiency")
+    st.markdown("*Maple Tapping job codes only (new spout install, dropline install & tap, spout already on)*")
 
-    total_hours = df['Hours'].sum()
-    total_taps = df['Taps_In'].sum()
+    # Helper to identify tapping job codes
+    def _is_tapping_job_code(job_text):
+        if pd.isna(job_text):
+            return False
+        j = str(job_text).lower()
+        return any(kw in j for kw in [
+            'new spout install', 'dropline install', 'spout already on',
+            'maple tapping',
+        ])
+
+    tapping_only = df[df['Job_Code'].apply(_is_tapping_job_code)]
+    total_tapping_hours = tapping_only['Hours'].sum()
+    total_taps = tapping_only['Taps_In'].sum()
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        avg_taps_per_hour = total_taps / total_hours if total_hours > 0 else 0
+        avg_taps_per_hour = total_taps / total_tapping_hours if total_tapping_hours > 0 else 0
         st.metric("Avg Taps/Hour", f"{avg_taps_per_hour:.1f}")
 
     with col2:
-        avg_mins_per_tap = (total_hours * 60) / total_taps if total_taps > 0 else 0
+        avg_mins_per_tap = (total_tapping_hours * 60) / total_taps if total_taps > 0 else 0
         st.metric("Avg Minutes/Tap", f"{avg_mins_per_tap:.1f}")
 
     with col3:
-        st.metric("Total Hours", f"{total_hours:,.1f}")
+        st.metric("Tapping Hours", f"{total_tapping_hours:,.1f}")
 
     st.divider()
 
@@ -337,7 +350,7 @@ def render(personnel_df, vacuum_df):
             # Convert to int for cleaner display
             pivot = pivot.astype(int)
 
-            st.dataframe(pivot, use_container_width=True, height=500)
+            st.dataframe(pivot, use_container_width=True)
         else:
             st.info("No tapping entries in selected time range")
     else:
@@ -351,40 +364,11 @@ def render(personnel_df, vacuum_df):
 
     st.subheader("👥 Employee Productivity")
 
-    st.markdown("**Tapping job codes only** — hours, taps/hr, and min/tap reflect only tapping work")
+    st.markdown("**Tapping job codes only** — new spout install, dropline install & tap, spout already on")
 
-    # Normalize job codes to combine similar ones
-    def normalize_job_code(job_code):
-        """Extract the key part of job code, removing NY/VT numbers and normalizing case"""
-        import re
-        if pd.isna(job_code):
-            return job_code
-        name = str(job_code)
-        # Remove state codes and numbers like "NY 240114", "- NY - 240114", "VT 240113"
-        name = re.sub(r'\s*-?\s*-?\s*(NY|VT|ny|vt)\s*-?\s*\d+', '', name)
-        # Extract text in parentheses if present, otherwise use cleaned name
-        if '(' in name and ')' in name:
-            paren_text = name[name.find('(')+1:name.find(')')]
-            return paren_text.strip().lower()
-        # Remove "Maple Tapping" prefix variations
-        name = re.sub(r'^Maple\s*[Tt]apping\s*-?\s*', '', name)
-        return name.strip().lower() if name.strip() else job_code.lower()
-
-    def is_tapping_job(job_normalized):
-        """Return True if this is a tapping job code (not storm repair, not general repair)"""
-        if pd.isna(job_normalized):
-            return False
-        j = str(job_normalized).lower()
-        # Exclude storm repair and non-tapping jobs
-        if 'storm' in j:
-            return False
-        # Include tapping-related job codes
-        return any(kw in j for kw in ['tap', 'spout', 'install'])
-
-    # Create normalized job code column
+    # Filter to tapping job codes using same filter as efficiency section
     filtered_df = filtered_df.copy()
-    filtered_df['Job_Code_Normalized'] = filtered_df['Job_Code'].apply(normalize_job_code)
-    filtered_df['Is_Tapping'] = filtered_df['Job_Code_Normalized'].apply(is_tapping_job)
+    filtered_df['Is_Tapping'] = filtered_df['Job_Code'].apply(_is_tapping_job_code)
 
     # Filter to only tapping job codes for productivity metrics
     tapping_df = filtered_df[filtered_df['Is_Tapping']].copy()
@@ -393,6 +377,7 @@ def render(personnel_df, vacuum_df):
         # Aggregate by employee — only tapping hours
         emp_stats = tapping_df.groupby('Employee').agg({
             'Taps_In': 'sum',
+            'Taps_Out': 'sum',
             'Hours': 'sum',
         }).reset_index()
 
@@ -403,16 +388,23 @@ def render(personnel_df, vacuum_df):
         emp_stats['Min_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
         emp_stats['Min_Per_Tap'] = emp_stats['Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
 
+        # Calculate % deleted
+        emp_stats['Pct_Deleted'] = ((emp_stats['Taps_Out'] / emp_stats['Taps_In']) * 100).round(1)
+        emp_stats['Pct_Deleted'] = emp_stats['Pct_Deleted'].replace([float('inf'), float('-inf')], 0).fillna(0)
+
         # Sort by total taps, filter to employees who actually tapped
         emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
         emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
 
         if not emp_stats.empty:
-            display = emp_stats[['Employee', 'Taps_In', 'Min_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
-            display.columns = ['Employee', 'Total Taps', 'Min/Tap', 'Tapping Hours', 'Taps/Hr']
+            display = emp_stats[['Employee', 'Taps_In', 'Taps_Out', 'Pct_Deleted', 'Min_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
+            display.columns = ['Employee', 'Taps Put In', 'Taps Deleted', '% Deleted', 'Min/Tap', 'Tapping Hours', 'Taps/Hr']
 
-            # Format hours
+            # Format
             display['Tapping Hours'] = display['Tapping Hours'].apply(lambda x: f"{x:.1f}")
+            display['Taps Put In'] = display['Taps Put In'].astype(int)
+            display['Taps Deleted'] = display['Taps Deleted'].astype(int)
+            display['% Deleted'] = display['% Deleted'].apply(lambda x: f"{x:.1f}%")
 
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
