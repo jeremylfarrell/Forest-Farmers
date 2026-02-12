@@ -309,6 +309,40 @@ def render(personnel_df, vacuum_df):
     st.divider()
 
     # ========================================================================
+    # DAILY TAPS BY EMPLOYEE (pivot table for cross-checking)
+    # ========================================================================
+
+    st.subheader("📋 Daily Taps by Employee")
+    st.markdown("*Taps Put In per employee per day — use to cross-check with TSheets/Excel*")
+
+    if not filtered_df.empty and 'Taps_In' in filtered_df.columns:
+        # Build pivot: rows = date, columns = employee, values = taps put in
+        pivot_data = filtered_df[filtered_df['Taps_In'] > 0].copy()
+        if not pivot_data.empty:
+            pivot_data['Day'] = pivot_data['Date'].dt.date
+            pivot = pivot_data.pivot_table(
+                index='Day',
+                columns='Employee',
+                values='Taps_In',
+                aggfunc='sum',
+                fill_value=0,
+                margins=True,
+                margins_name='Total'
+            )
+            pivot = pivot.sort_index(ascending=False)
+
+            # Convert to int for cleaner display
+            pivot = pivot.astype(int)
+
+            st.dataframe(pivot, use_container_width=True, height=500)
+        else:
+            st.info("No tapping entries in selected time range")
+    else:
+        st.info("No tapping data available")
+
+    st.divider()
+
+    # ========================================================================
     # EMPLOYEE PRODUCTIVITY - WITH JOB TYPE BREAKDOWN
     # ========================================================================
 
