@@ -32,26 +32,29 @@ def render(personnel_df, vacuum_df):
         st.info("This page requires job code information to identify repair work. Available columns: " + ", ".join(personnel_df.columns))
         return
     
-    # Filter to only repair-related job codes
-    repair_keywords = ['inseason tubing repair', 'already identified tubing issue', 'tubing repair', 'leak repair', 'repair']
-    
-    # Create boolean mask for repair jobs (case insensitive)
+    # Filter to only repair-related job codes (no storm repair or road improvements)
+    repair_keywords = ['inseason tubing repair', 'already identified tubing issue',
+                       'fixing identified tubing', 'tubing repair', 'leak repair']
+
+    # Create boolean mask for repair jobs (case insensitive), excluding storm/road
     repair_mask = personnel_df[job_col].str.lower().str.contains('|'.join(repair_keywords), na=False, case=False)
-    
-    repair_df = personnel_df[repair_mask].copy()
-    
+    exclude_mask = personnel_df[job_col].str.lower().str.contains('storm|road improvement', na=False, case=False)
+
+    repair_df = personnel_df[repair_mask & ~exclude_mask].copy()
+
     # Show filtering info
     total_sessions = len(personnel_df)
     repair_sessions = len(repair_df)
-    
+
     if repair_sessions == 0:
         st.warning(f"⚠️ No repair work found in {total_sessions:,} personnel records")
         st.info(f"""
         **Looking for job codes containing:**
         - "inseason tubing repair"
         - "already identified tubing issue"
-        - Other repair-related keywords
-        
+        - "fixing identified tubing"
+        - Other repair-related keywords (excluding storm repair and road improvements)
+
         **Job codes found in your data:**
         """)
         unique_jobs = personnel_df[job_col].dropna().unique()
@@ -61,11 +64,69 @@ def render(personnel_df, vacuum_df):
         return
     
     st.info(f"🔍 **Analyzing {repair_sessions:,} repair sessions** from {total_sessions:,} total work sessions ({repair_sessions/total_sessions*100:.1f}%)")
-    
+
     # Show which job codes are included
     repair_jobs = repair_df[job_col].unique()
     with st.expander("📋 Repair job codes included in analysis"):
         st.write(sorted(repair_jobs))
+
+    # --- Filters ---
+    from utils import extract_conductor_system
+
+    # Add conductor system
+    mainline_col = find_column(repair_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    if mainline_col:
+        repair_df['Conductor System'] = repair_df[mainline_col].apply(extract_conductor_system)
+
+    emp_col_name = find_column(repair_df, 'Employee Name', 'employee', 'name')
+    date_col_name = find_column(repair_df, 'Date', 'date', 'timestamp')
+
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+    with filter_col1:
+        if emp_col_name:
+            employees = ['All'] + sorted([e for e in repair_df[emp_col_name].unique() if pd.notna(e)])
+            selected_emp_filter = st.selectbox("Employee", employees, index=0, key="lc_emp_filter")
+        else:
+            selected_emp_filter = 'All'
+
+    with filter_col2:
+        if 'Conductor System' in repair_df.columns:
+            systems = ['All'] + sorted([s for s in repair_df['Conductor System'].unique() if s and s != 'Unknown'])
+            selected_system = st.selectbox("Conductor System", systems, index=0, key="lc_sys_filter")
+        else:
+            selected_system = 'All'
+
+    with filter_col3:
+        if date_col_name:
+            repair_df[date_col_name] = pd.to_datetime(repair_df[date_col_name], errors='coerce')
+            valid_dates = repair_df[date_col_name].dropna()
+            if not valid_dates.empty:
+                min_date = valid_dates.min().date()
+                max_date = valid_dates.max().date()
+                date_range = st.date_input("Date Range", value=(min_date, max_date), key="lc_date_filter")
+            else:
+                date_range = None
+        else:
+            date_range = None
+
+    # Apply filters
+    if selected_emp_filter != 'All' and emp_col_name:
+        repair_df = repair_df[repair_df[emp_col_name] == selected_emp_filter]
+    if selected_system != 'All' and 'Conductor System' in repair_df.columns:
+        repair_df = repair_df[repair_df['Conductor System'] == selected_system]
+    if date_range and date_col_name and len(date_range) == 2:
+        repair_df = repair_df[
+            (repair_df[date_col_name].dt.date >= date_range[0]) &
+            (repair_df[date_col_name].dt.date <= date_range[1])
+        ]
+
+    repair_sessions = len(repair_df)
+    if repair_sessions == 0:
+        st.warning("No repair sessions match the selected filters")
+        return
+
+    st.divider()
 
     # Calculate effectiveness using only repair work
     with st.spinner("Analyzing leak repair effectiveness..."):
@@ -427,6 +488,72 @@ def render(personnel_df, vacuum_df):
         chart_data = chart_data.set_index('Date')
 
         st.line_chart(chart_data, use_container_width=True)
+
+    st.divider()
+
+    # ========================================================================
+    # MAINLINE HISTORY — chronological view of all entries for a selected line
+    # ========================================================================
+    st.subheader("📜 Mainline History")
+    st.markdown("*All personnel entries for a selected mainline — chronological order*")
+
+    # Use the original personnel_df (unfiltered by job code) for full history
+    _mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    _date_col = find_column(personnel_df, 'Date', 'date', 'timestamp')
+    _emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+    _job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode', 'task', 'work')
+    _hours_col = find_column(personnel_df, 'Hours', 'hours', 'time')
+    _taps_in = find_column(personnel_df, 'Taps Put In', 'taps_in', 'taps put in')
+    _taps_out = find_column(personnel_df, 'Taps Removed', 'taps_removed', 'taps out')
+    _taps_cap = find_column(personnel_df, 'taps capped', 'taps_capped')
+    _repairs = find_column(personnel_df, 'Repairs needed', 'repairs', 'repairs_needed')
+    _notes = find_column(personnel_df, 'Notes', 'notes', 'note')
+
+    if _mainline_col:
+        # Build conductor system -> mainline mapping for two-level selection
+        all_mainlines = sorted([m for m in personnel_df[_mainline_col].unique()
+                                if pd.notna(m) and str(m).strip()])
+
+        hist_col1, hist_col2 = st.columns(2)
+
+        with hist_col1:
+            ml_systems = ['All'] + sorted(set(extract_conductor_system(m) for m in all_mainlines if extract_conductor_system(m) != 'Unknown'))
+            hist_system = st.selectbox("Filter by Conductor System", ml_systems, index=0, key="hist_sys")
+
+        filtered_mainlines = all_mainlines
+        if hist_system != 'All':
+            filtered_mainlines = [m for m in all_mainlines if extract_conductor_system(m) == hist_system]
+
+        with hist_col2:
+            selected_ml = st.selectbox("Select Mainline", filtered_mainlines, index=0 if filtered_mainlines else None, key="hist_ml")
+
+        if selected_ml:
+            ml_data = personnel_df[personnel_df[_mainline_col] == selected_ml].copy()
+            if _date_col:
+                ml_data[_date_col] = pd.to_datetime(ml_data[_date_col], errors='coerce')
+                ml_data = ml_data.sort_values(_date_col, ascending=True)
+
+            # Build display columns
+            hist_cols = []
+            hist_names = []
+
+            for col, name in [(_date_col, 'Date'), (_emp_col, 'Employee'), (_job_col, 'Job Code'),
+                               (_hours_col, 'Hours'), (_taps_in, 'Taps In'), (_taps_out, 'Taps Out'),
+                               (_taps_cap, 'Taps Capped'), (_repairs, 'Repairs Needed'), (_notes, 'Notes')]:
+                if col and col in ml_data.columns:
+                    hist_cols.append(col)
+                    hist_names.append(name)
+
+            if hist_cols:
+                hist_display = ml_data[hist_cols].copy()
+                if _date_col in hist_cols:
+                    hist_display[_date_col] = hist_display[_date_col].dt.strftime('%Y-%m-%d').fillna('')
+                hist_display.columns = hist_names
+                st.dataframe(hist_display, use_container_width=True, hide_index=True)
+            else:
+                st.info("No displayable columns found")
+    else:
+        st.info("Mainline column not found in personnel data")
 
     st.divider()
 

@@ -10,6 +10,7 @@ import plotly.express as px
 from datetime import datetime
 
 from data_loader import save_repairs_updates
+from utils import extract_conductor_system
 
 
 def render(personnel_df, vacuum_df=None, repairs_df=None):
@@ -40,6 +41,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     else:
         df['Status'] = 'Open'
 
+    # Add conductor system column
+    if 'Mainline' in df.columns:
+        df['Conductor System'] = df['Mainline'].apply(extract_conductor_system)
+
     # --- Summary Metrics ---
     st.subheader("Summary")
 
@@ -62,17 +67,24 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     st.divider()
 
     # --- Filters ---
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         status_options = ['All'] + sorted(df['Status'].unique().tolist())
         selected_status = st.selectbox("Status", status_options, index=0)
 
     with col2:
+        if 'Conductor System' in df.columns:
+            systems = ['All'] + sorted([s for s in df['Conductor System'].unique() if s and s != 'Unknown'])
+            selected_system = st.selectbox("Conductor System", systems, index=0)
+        else:
+            selected_system = 'All'
+
+    with col3:
         mainlines = ['All'] + sorted([m for m in df['Mainline'].unique() if m and str(m) != 'nan' and str(m).strip()])
         selected_mainline = st.selectbox("Mainline", mainlines, index=0)
 
-    with col3:
+    with col4:
         reporters = ['All'] + sorted([r for r in df['Found By'].unique() if r and str(r) != 'nan' and str(r).strip()])
         selected_reporter = st.selectbox("Found By", reporters, index=0)
 
@@ -80,6 +92,8 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     filtered = df.copy()
     if selected_status != 'All':
         filtered = filtered[filtered['Status'] == selected_status]
+    if selected_system != 'All' and 'Conductor System' in filtered.columns:
+        filtered = filtered[filtered['Conductor System'] == selected_system]
     if selected_mainline != 'All':
         filtered = filtered[filtered['Mainline'] == selected_mainline]
     if selected_reporter != 'All':
@@ -156,17 +170,20 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
-        st.subheader("Repairs by Mainline")
-        open_by_mainline = df[df['Status'] == 'Open'].groupby('Mainline').size().reset_index(name='Count')
-        if not open_by_mainline.empty:
-            open_by_mainline = open_by_mainline.sort_values('Count', ascending=True)
-            fig = px.bar(open_by_mainline, x='Count', y='Mainline', orientation='h',
-                         color='Count', color_continuous_scale=['#4CAF50', '#ff6b6b'])
-            fig.update_layout(height=max(300, len(open_by_mainline) * 25 + 100),
-                              showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig, use_container_width=True)
+        st.subheader("Repairs by Conductor System")
+        if 'Conductor System' in df.columns:
+            open_by_system = df[df['Status'] == 'Open'].groupby('Conductor System').size().reset_index(name='Count')
+            if not open_by_system.empty:
+                open_by_system = open_by_system.sort_values('Count', ascending=True)
+                fig = px.bar(open_by_system, x='Count', y='Conductor System', orientation='h',
+                             color='Count', color_continuous_scale=['#4CAF50', '#ff6b6b'])
+                fig.update_layout(height=max(300, len(open_by_system) * 30 + 100),
+                                  showlegend=False, coloraxis_showscale=False)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No open repairs to chart")
         else:
-            st.info("No open repairs to chart")
+            st.info("Mainline data not available for grouping")
 
     with chart_col2:
         st.subheader("Repairs by Reporter")
@@ -180,6 +197,55 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("No open repairs to chart")
+
+    st.divider()
+
+    # --- Repair Detail Table ---
+    st.subheader("📋 Repair Detail")
+
+    detail_df = filtered.copy()
+    detail_cols = []
+    detail_names = []
+
+    if 'Conductor System' in detail_df.columns:
+        detail_cols.append('Conductor System')
+        detail_names.append('System')
+    if 'Mainline' in detail_df.columns:
+        detail_cols.append('Mainline')
+        detail_names.append('Mainline')
+    if 'Description' in detail_df.columns:
+        detail_cols.append('Description')
+        detail_names.append('Issue')
+    if 'Found By' in detail_df.columns:
+        detail_cols.append('Found By')
+        detail_names.append('Reported By')
+    if 'Date Found' in detail_df.columns:
+        detail_cols.append('Date Found')
+        detail_names.append('Date Found')
+    if 'Resolved By' in detail_df.columns:
+        detail_cols.append('Resolved By')
+        detail_names.append('Fixed By')
+
+    # Calculate days to fix
+    if 'Date Found' in detail_df.columns and 'Date Resolved' in detail_df.columns:
+        detail_df['Days to Fix'] = (detail_df['Date Resolved'] - detail_df['Date Found']).dt.days
+        detail_df['Days to Fix'] = detail_df['Days to Fix'].apply(
+            lambda x: f"{int(x)}d" if pd.notna(x) and x >= 0 else "Open"
+        )
+        detail_cols.append('Days to Fix')
+        detail_names.append('Days to Fix')
+
+    if 'Status' in detail_df.columns:
+        detail_cols.append('Status')
+        detail_names.append('Status')
+
+    if detail_cols:
+        detail_display = detail_df[detail_cols].copy()
+        if 'Date Found' in detail_display.columns:
+            detail_display['Date Found'] = detail_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+        detail_display.columns = detail_names
+        detail_display = detail_display.sort_values('Date Found', ascending=False) if 'Date Found' in detail_names else detail_display
+        st.dataframe(detail_display, use_container_width=True, hide_index=True)
 
     st.divider()
 

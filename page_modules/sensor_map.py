@@ -11,6 +11,7 @@ from streamlit_folium import st_folium
 import config
 from utils import find_column, get_vacuum_column
 import re
+import math
 
 
 def match_mainline_to_sensor(mainline, sensor_names):
@@ -190,8 +191,13 @@ def render(vacuum_df, personnel_df):
     else:
         latest = vacuum_df.groupby(sensor_col).first().reset_index()
 
-    # Filter out birch sensors and relays
-    latest = latest[~latest[sensor_col].str.contains('birch|relay', case=False, na=False)]
+    # Filter out birch sensors (start with lowercase 'b') and relays/inactive
+    # (sensors not matching pattern: 2-4 uppercase letters followed by a number)
+    valid_sensor_pattern = r'^[A-Z]{2,4}\d'
+    latest = latest[
+        (~latest[sensor_col].str.startswith('b', na=False)) &
+        (latest[sensor_col].str.match(valid_sensor_pattern, na=False))
+    ]
 
     # Clean data
     map_data = latest[[sensor_col, lat_col, lon_col]].copy()
@@ -489,9 +495,10 @@ def render(vacuum_df, personnel_df):
         </div>
         """
 
-        # Scale dot size by tap count: min 4 (0 taps) to max 18 (highest)
-        tap_ratio = tap_count / max_taps_value
-        dot_radius = 4 + tap_ratio * 14  # 4 to 18
+        # Scale dot size by tap count: min 3 (0 taps) to max 22 (highest)
+        # Use square root scaling for more visual separation between low/high
+        tap_ratio = math.sqrt(tap_count / max_taps_value) if max_taps_value > 0 else 0
+        dot_radius = 3 + tap_ratio * 19  # 3 to 22
 
         # Add circle marker with sensor name tooltip
         folium.CircleMarker(

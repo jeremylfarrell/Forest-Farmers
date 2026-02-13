@@ -120,3 +120,16 @@ def format_improvement(value):
     if pd.isna(value):
         return "N/A"
     return f"{value:+.1f}\""
+
+
+def extract_conductor_system(mainline):
+    """
+    Extract the conductor system prefix from a mainline name.
+    The conductor system is the 2-4 letter abbreviation that precedes the number.
+    E.g., 'RHAS13' -> 'RHAS', 'AB5' -> 'AB', 'MPC12' -> 'MPC'
+    """
+    import re
+    if pd.isna(mainline) or not str(mainline).strip():
+        return 'Unknown'
+    m = re.match(r'^([A-Za-z]{1,4})', str(mainline).strip())
+    return m.group(1).upper() if m else 'Unknown'
