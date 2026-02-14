@@ -89,7 +89,7 @@ def render(personnel_df, vacuum_df):
     st.subheader("📊 Season Summary")
 
     # Main metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         total_in = df['Taps_In'].sum()
@@ -100,17 +100,8 @@ def render(personnel_df, vacuum_df):
         st.metric("Total Taps Removed", f"{int(total_out):,}")
 
     with col3:
-        net_change = df['Net_Taps'].sum()
-        st.metric("Net Change", f"{int(net_change):,}",
-                  delta=f"{int(net_change):,}")
-
-    with col4:
         total_capped = df['Taps_Capped'].sum()
         st.metric("Taps Capped", f"{int(total_capped):,}")
-
-    with col5:
-        total_repairs = df['Repairs'].sum()
-        st.metric("Repairs Needed", f"{int(total_repairs):,}")
 
     # ========================================================================
     # TAPPING COMPLETION ESTIMATE
@@ -374,10 +365,9 @@ def render(personnel_df, vacuum_df):
     tapping_df = filtered_df[filtered_df['Is_Tapping']].copy()
 
     if not tapping_df.empty:
-        # Aggregate by employee — only tapping hours
-        emp_stats = tapping_df.groupby('Employee').agg({
+        # Aggregate by employee and job code — only tapping hours
+        emp_stats = tapping_df.groupby(['Employee', 'Job_Code']).agg({
             'Taps_In': 'sum',
-            'Taps_Out': 'sum',
             'Hours': 'sum',
         }).reset_index()
 
@@ -388,23 +378,17 @@ def render(personnel_df, vacuum_df):
         emp_stats['Min_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
         emp_stats['Min_Per_Tap'] = emp_stats['Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
 
-        # Calculate % deleted
-        emp_stats['Pct_Deleted'] = ((emp_stats['Taps_Out'] / emp_stats['Taps_In']) * 100).round(1)
-        emp_stats['Pct_Deleted'] = emp_stats['Pct_Deleted'].replace([float('inf'), float('-inf')], 0).fillna(0)
-
-        # Sort by total taps, filter to employees who actually tapped
-        emp_stats = emp_stats.sort_values('Taps_In', ascending=False)
+        # Sort by employee then total taps, filter to rows with actual taps
+        emp_stats = emp_stats.sort_values(['Employee', 'Taps_In'], ascending=[True, False])
         emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
 
         if not emp_stats.empty:
-            display = emp_stats[['Employee', 'Taps_In', 'Taps_Out', 'Pct_Deleted', 'Min_Per_Tap', 'Hours', 'Taps_Per_Hour']].copy()
-            display.columns = ['Employee', 'Taps Put In', 'Taps Deleted', '% Deleted', 'Min/Tap', 'Tapping Hours', 'Taps/Hr']
+            display = emp_stats[['Employee', 'Job_Code', 'Taps_In', 'Taps_Per_Hour', 'Min_Per_Tap', 'Hours']].copy()
+            display.columns = ['Employee', 'Type of Tapping', 'Total Taps', 'Taps/Hr', 'Min/Tap', 'Tapping Hours']
 
             # Format
             display['Tapping Hours'] = display['Tapping Hours'].apply(lambda x: f"{x:.1f}")
-            display['Taps Put In'] = display['Taps Put In'].astype(int)
-            display['Taps Deleted'] = display['Taps Deleted'].astype(int)
-            display['% Deleted'] = display['% Deleted'].apply(lambda x: f"{x:.1f}%")
+            display['Total Taps'] = display['Total Taps'].astype(int)
 
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
@@ -412,7 +396,7 @@ def render(personnel_df, vacuum_df):
             col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.metric("Employees Tracked", len(emp_stats))
+                st.metric("Employees Tracked", emp_stats['Employee'].nunique())
 
             with col2:
                 total_tapping_taps = emp_stats['Taps_In'].sum()
@@ -438,7 +422,7 @@ def render(personnel_df, vacuum_df):
         - **Taps Installed**: New taps put into trees
         - **Taps Removed**: Old taps taken out
         - **Taps Capped**: Taps that were capped off (end of season or non-productive)
-        - **Net Change**: Taps Installed - Taps Removed (overall system growth/shrinkage)
+        - **Net Change**: Taps Installed - Taps Removed - Taps In Place for Previous Season (overall system growth/shrinkage)
         - **Minutes Per Tap**: Time efficiency for tapping work only (lower = faster)
         - **Taps Per Hour**: Productivity metric for tapping work only (higher = more efficient)
         - **Tapping Hours**: Only hours spent in tapping job codes (excludes repairs, storm, etc.)
