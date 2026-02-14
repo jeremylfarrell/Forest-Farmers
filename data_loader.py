@@ -462,6 +462,15 @@ def process_vacuum_data(df):
     for col in vacuum_cols:
         df[col] = df[col].fillna(config.FILL_MISSING_VACUUM)
 
+    # Detect and process releaser differential column
+    releaser_col = None
+    for col in df.columns:
+        if 'releaser' in col.lower() or 'differential' in col.lower():
+            releaser_col = col
+            break
+    if releaser_col:
+        df[releaser_col] = pd.to_numeric(df[releaser_col], errors='coerce')
+
     return df
 
 
@@ -519,6 +528,11 @@ def process_personnel_data(df):
         df['Site'] = df['Job'].apply(parse_site_from_job)
     else:
         df['Site'] = 'UNK'
+
+    # Parse Clock In / Clock Out columns as datetime (for timestamp-based vacuum matching)
+    for clock_col in ['Clock In', 'Clock Out']:
+        if clock_col in df.columns:
+            df[clock_col] = pd.to_datetime(df[clock_col], errors='coerce')
 
     # Remove rows with invalid dates
     if 'Date' in df.columns:

@@ -269,9 +269,8 @@ def render(personnel_df, vacuum_df):
                   delta=f"{avg_improvement:.1f}\"" if avg_improvement > 0 else None)
 
     with col3:
-        positive_sessions = len(effectiveness_df[effectiveness_df['Improvement'] > 0])
-        success_rate = (positive_sessions / len(effectiveness_df)) * 100
-        st.metric("Successful Repairs", f"{success_rate:.0f}%")
+        median_improvement = effectiveness_df['Improvement'].median()
+        st.metric("Median Vac Change", f"{median_improvement:+.1f}\"")
 
     with col4:
         total_improvement = effectiveness_df['Improvement'].sum()
@@ -292,13 +291,10 @@ def render(personnel_df, vacuum_df):
                     st.markdown(f"### {emoji} {site}")
                     
                     site_avg = site_data['Improvement'].mean()
-                    st.metric("Avg Improvement", f"{site_avg:+.1f}\"")
-                    
+                    st.metric("Avg Vac Change", f"{site_avg:+.1f}\"")
+
                     site_sessions = len(site_data)
                     st.metric("Repairs", site_sessions)
-                    
-                    site_success = len(site_data[site_data['Improvement'] > 0]) / len(site_data) * 100
-                    st.metric("Success Rate", f"{site_success:.0f}%")
 
     st.divider()
 
@@ -419,9 +415,8 @@ def render(personnel_df, vacuum_df):
             st.metric("Avg Improvement", f"{avg_imp:+.1f}\"")
 
         with col3:
-            positive = len(emp_sessions[emp_sessions['Improvement'] > 0])
-            pct = (positive / len(emp_sessions)) * 100
-            st.metric("Successful Repairs", f"{positive}/{len(emp_sessions)} ({pct:.0f}%)")
+            median_imp = emp_sessions['Improvement'].median()
+            st.metric("Median Vac Change", f"{median_imp:+.1f}\"")
 
         with col4:
             if 'Site' in emp_sessions.columns:
@@ -456,7 +451,7 @@ def render(personnel_df, vacuum_df):
         display_sessions['Vacuum_Before'] = display_sessions['Vacuum_Before'].apply(lambda x: f"{x:.1f}\"")
         display_sessions['Vacuum_After'] = display_sessions['Vacuum_After'].apply(lambda x: f"{x:.1f}\"")
         display_sessions['Improvement'] = display_sessions['Improvement'].apply(
-            lambda x: f"🟢 +{x:.1f}\"" if x > 0 else f"🔴 {x:.1f}\""
+            lambda x: f"{x:+.1f}\""
         )
 
         cols_to_show = ['Date', 'Mainline', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
@@ -557,6 +552,129 @@ def render(personnel_df, vacuum_df):
 
     st.divider()
 
+    # ========================================================================
+    # RELEASER DIFFERENTIAL REPORT
+    # ========================================================================
+    st.subheader("📊 Releaser Differential Report")
+    st.markdown("*Releaser differential readings before and after repair sessions*")
+
+    # Find releaser differential column in vacuum data
+    releaser_col = None
+    for col in vacuum_df.columns:
+        if 'releaser' in col.lower() or 'differential' in col.lower():
+            releaser_col = col
+            break
+
+    if releaser_col is None:
+        st.info(
+            "Releaser differential column not found in vacuum data. "
+            "Add a column containing 'releaser' or 'differential' in the name "
+            "to the vacuum sheets to enable this report."
+        )
+    elif effectiveness_df.empty:
+        st.info("No matched repair sessions to analyze releaser differential.")
+    else:
+        from utils import find_column
+        from datetime import timedelta
+
+        vac_mainline_col = find_column(
+            vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location'
+        )
+        vac_timestamp_col = find_column(
+            vacuum_df, 'Last communication', 'Last Communication', 'Timestamp', 'timestamp'
+        )
+
+        if vac_mainline_col and vac_timestamp_col:
+            vac = vacuum_df[[vac_mainline_col, vac_timestamp_col, releaser_col]].copy()
+            vac.columns = ['Mainline', 'Timestamp', 'Releaser_Diff']
+            vac['Timestamp'] = pd.to_datetime(vac['Timestamp'], errors='coerce')
+            vac['Mainline'] = vac['Mainline'].astype(str).str.strip().str.upper()
+            vac = vac.dropna(subset=['Timestamp', 'Releaser_Diff'])
+
+            # Check for Clock In/Out in the repair data
+            _clock_in_col = None
+            _clock_out_col = None
+            for col in personnel_df.columns:
+                if col.lower().strip() == 'clock in':
+                    _clock_in_col = col
+                elif col.lower().strip() == 'clock out':
+                    _clock_out_col = col
+            _use_ts = _clock_in_col is not None and _clock_out_col is not None
+
+            rel_results = []
+            TOLERANCE = timedelta(minutes=30)
+
+            for _, row in effectiveness_df.iterrows():
+                mainline = str(row['Mainline']).strip().upper()
+                ml_vac = vac[vac['Mainline'] == mainline]
+                if ml_vac.empty:
+                    continue
+
+                work_date = pd.to_datetime(row['Date'])
+
+                # Try timestamp-based matching first
+                rel_before = None
+                rel_after = None
+
+                if _use_ts:
+                    # Get clock times from the original personnel data for this session
+                    p_mask = (
+                        (personnel_df[find_column(personnel_df, 'Employee Name', 'employee')].astype(str) == str(row['Employee'])) &
+                        (pd.to_datetime(personnel_df[find_column(personnel_df, 'Date', 'date')], errors='coerce').dt.date == work_date.date())
+                    )
+                    matched_p = personnel_df[p_mask]
+                    if not matched_p.empty:
+                        ci = pd.to_datetime(matched_p.iloc[0][_clock_in_col], errors='coerce')
+                        co = pd.to_datetime(matched_p.iloc[0][_clock_out_col], errors='coerce')
+                        if pd.notna(ci) and pd.notna(co):
+                            diffs_b = (ml_vac['Timestamp'] - ci).abs()
+                            best_b = diffs_b.idxmin()
+                            if diffs_b[best_b] <= TOLERANCE:
+                                rel_before = ml_vac.loc[best_b, 'Releaser_Diff']
+
+                            target_a = co + timedelta(hours=1)
+                            diffs_a = (ml_vac['Timestamp'] - target_a).abs()
+                            best_a = diffs_a.idxmin()
+                            if diffs_a[best_a] <= TOLERANCE:
+                                rel_after = ml_vac.loc[best_a, 'Releaser_Diff']
+
+                # Fallback: daily averages
+                if rel_before is None:
+                    day_before = work_date.date() - timedelta(days=1)
+                    readings = ml_vac[ml_vac['Timestamp'].dt.date == day_before]
+                    if readings.empty:
+                        readings = ml_vac[ml_vac['Timestamp'].dt.date == (work_date.date() - timedelta(days=2))]
+                    if not readings.empty:
+                        rel_before = readings['Releaser_Diff'].mean()
+
+                if rel_after is None:
+                    day_after = work_date.date() + timedelta(days=1)
+                    readings = ml_vac[ml_vac['Timestamp'].dt.date == day_after]
+                    if readings.empty:
+                        readings = ml_vac[ml_vac['Timestamp'].dt.date == (work_date.date() + timedelta(days=2))]
+                    if not readings.empty:
+                        rel_after = readings['Releaser_Diff'].mean()
+
+                if rel_before is not None and rel_after is not None:
+                    rel_results.append({
+                        'Date': work_date.strftime('%Y-%m-%d'),
+                        'Employee': row['Employee'],
+                        'Mainline': row['Mainline'],
+                        'Releaser Diff Before': round(rel_before, 1),
+                        'Releaser Diff After': round(rel_after, 1),
+                        'Change': round(rel_after - rel_before, 1)
+                    })
+
+            if rel_results:
+                rel_df = pd.DataFrame(rel_results)
+                st.dataframe(rel_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Could not match releaser differential readings to any repair sessions.")
+        else:
+            st.warning("Could not find mainline or timestamp columns in vacuum data for releaser analysis.")
+
+    st.divider()
+
     # Tips with leak checking focus
     with st.expander("💡 Understanding Leak Checking Metrics"):
         st.markdown("""
@@ -574,11 +692,10 @@ def render(personnel_df, vacuum_df):
         - Track repair effectiveness across sites
         - Prioritize difficult locations that need experienced repair crews
         
-        **What Makes a Good Repair:**
-        - **+5" or more**: Excellent repair, major leak fixed
-        - **+2" to +5"**: Good repair, solid improvement
-        - **0" to +2"**: Minor improvement, small leak fixed
-        - **Negative**: Problem may not be fixed, or new issue occurred
+        **Interpreting Vacuum Changes:**
+        - Positive values indicate vacuum improved after the repair
+        - Larger positive values suggest more significant leaks were fixed
+        - Negative values may indicate the problem wasn't fully resolved, or other factors affected vacuum
         
         **Multi-Site Features:**
         - Compare repair effectiveness between NY and VT

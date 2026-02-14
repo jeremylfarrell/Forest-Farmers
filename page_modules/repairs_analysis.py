@@ -10,6 +10,7 @@ import plotly.express as px
 from datetime import datetime
 
 from data_loader import save_repairs_updates
+from metrics import calculate_repair_costs
 from utils import extract_conductor_system
 
 
@@ -204,6 +205,14 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     st.subheader("📋 Repair Detail")
 
     detail_df = filtered.copy()
+
+    # Calculate and merge repair costs
+    cost_df = calculate_repair_costs(personnel_df, df)
+    if not cost_df.empty and 'Repair ID' in detail_df.columns:
+        detail_df = detail_df.merge(cost_df, on='Repair ID', how='left')
+        detail_df['Repair_Cost'] = detail_df['Repair_Cost'].fillna(0)
+        detail_df['Cost_Per_Tap'] = detail_df['Cost_Per_Tap'].fillna(0)
+
     detail_cols = []
     detail_names = []
 
@@ -239,10 +248,21 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         detail_cols.append('Status')
         detail_names.append('Status')
 
+    if 'Repair_Cost' in detail_df.columns:
+        detail_cols.append('Repair_Cost')
+        detail_names.append('Repair Cost')
+    if 'Cost_Per_Tap' in detail_df.columns:
+        detail_cols.append('Cost_Per_Tap')
+        detail_names.append('Cost/Tap')
+
     if detail_cols:
         detail_display = detail_df[detail_cols].copy()
         if 'Date Found' in detail_display.columns:
             detail_display['Date Found'] = detail_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+        if 'Repair_Cost' in detail_display.columns:
+            detail_display['Repair_Cost'] = detail_display['Repair_Cost'].apply(lambda x: f"${x:,.2f}")
+        if 'Cost_Per_Tap' in detail_display.columns:
+            detail_display['Cost_Per_Tap'] = detail_display['Cost_Per_Tap'].apply(lambda x: f"${x:,.2f}")
         detail_display.columns = detail_names
         detail_display = detail_display.sort_values('Date Found', ascending=False) if 'Date Found' in detail_names else detail_display
         st.dataframe(detail_display, use_container_width=True, hide_index=True)
@@ -269,6 +289,22 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                           len(valid_resolved[valid_resolved['Date Resolved'] >= pd.Timestamp.now().replace(day=1)]))
 
             st.divider()
+
+    # --- Cost Summary ---
+    if 'Repair_Cost' in detail_df.columns and detail_df['Repair_Cost'].sum() > 0:
+        st.subheader("Cost Summary")
+        cost_col1, cost_col2, cost_col3 = st.columns(3)
+        with cost_col1:
+            total_cost = detail_df['Repair_Cost'].sum()
+            st.metric("Total Repair Cost", f"${total_cost:,.2f}")
+        with cost_col2:
+            repairs_with_cost = detail_df[detail_df['Repair_Cost'] > 0]
+            avg_cost = repairs_with_cost['Repair_Cost'].mean() if not repairs_with_cost.empty else 0
+            st.metric("Avg Cost / Repair", f"${avg_cost:,.2f}")
+        with cost_col3:
+            avg_cpt = repairs_with_cost['Cost_Per_Tap'].mean() if not repairs_with_cost.empty else 0
+            st.metric("Avg Cost / Tap", f"${avg_cpt:,.2f}")
+        st.divider()
 
     # --- Completed Repairs (editable) ---
     if not completed.empty:

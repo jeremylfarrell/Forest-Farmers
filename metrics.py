@@ -438,15 +438,34 @@ def calculate_employee_effectiveness(personnel_df, vacuum_df):
         }
         return empty_df
 
+    # Check for Clock In / Clock Out columns for precise timestamp matching
+    clock_in_col = None
+    clock_out_col = None
+    for col in personnel_df.columns:
+        if col.lower().strip() == 'clock in':
+            clock_in_col = col
+        elif col.lower().strip() == 'clock out':
+            clock_out_col = col
+    use_timestamps = clock_in_col is not None and clock_out_col is not None
+
     # Prepare personnel data
-    personnel = personnel_df[[emp_name_col, emp_date_col, emp_mainline_col]].copy()
+    base_cols = [emp_name_col, emp_date_col, emp_mainline_col]
+    personnel = personnel_df[base_cols].copy()
     if emp_hours_col:
         personnel['Hours'] = personnel_df[emp_hours_col]
 
-    personnel.columns = ['Employee', 'Work_Date', 'Mainline', 'Hours'] if emp_hours_col else ['Employee', 'Work_Date',
-                                                                                              'Mainline']
+    col_names = ['Employee', 'Work_Date', 'Mainline']
+    if emp_hours_col:
+        col_names.append('Hours')
+    personnel.columns = col_names
+
     personnel['Work_Date'] = pd.to_datetime(personnel['Work_Date'], errors='coerce')
     personnel = personnel.dropna(subset=['Work_Date'])
+
+    # Add clock in/out if available
+    if use_timestamps:
+        personnel['Clock_In'] = pd.to_datetime(personnel_df.loc[personnel.index, clock_in_col], errors='coerce')
+        personnel['Clock_Out'] = pd.to_datetime(personnel_df.loc[personnel.index, clock_out_col], errors='coerce')
 
     # Normalize mainline names (strip whitespace, consistent case)
     personnel['Mainline'] = personnel['Mainline'].astype(str).str.strip().str.upper()
@@ -483,6 +502,8 @@ def calculate_employee_effectiveness(personnel_df, vacuum_df):
     no_after_count = 0
     success_count = 0
 
+    TOLERANCE = timedelta(minutes=30)
+
     for idx, work in personnel.iterrows():
         employee = work['Employee']
         work_date = work['Work_Date']
@@ -496,38 +517,52 @@ def calculate_employee_effectiveness(personnel_df, vacuum_df):
             no_match_count += 1
             continue
 
-        # ⭐ USE DAILY AVERAGES instead of closest readings
-        # Compare the day BEFORE work vs the day AFTER work
+        vac_before = None
+        vac_after = None
 
-        # Get average vacuum for the day before work
-        before_date = work_date_only - timedelta(days=1)
-        before_readings = mainline_vacuum[mainline_vacuum['Date'] == before_date]
+        # --- Timestamp-based matching (preferred) ---
+        if use_timestamps and pd.notna(work.get('Clock_In')) and pd.notna(work.get('Clock_Out')):
+            clock_in = work['Clock_In']
+            clock_out = work['Clock_Out']
+            target_after = clock_out + timedelta(hours=1)
 
-        # If no data on day before, try 2 days before
-        if before_readings.empty:
-            before_date = work_date_only - timedelta(days=2)
+            # Find closest reading to clock-in
+            time_diffs_before = (mainline_vacuum['Timestamp'] - clock_in).abs()
+            best_before_idx = time_diffs_before.idxmin()
+            if time_diffs_before[best_before_idx] <= TOLERANCE:
+                vac_before = mainline_vacuum.loc[best_before_idx, 'Vacuum']
+
+            # Find closest reading to 1hr after clock-out
+            time_diffs_after = (mainline_vacuum['Timestamp'] - target_after).abs()
+            best_after_idx = time_diffs_after.idxmin()
+            if time_diffs_after[best_after_idx] <= TOLERANCE:
+                vac_after = mainline_vacuum.loc[best_after_idx, 'Vacuum']
+
+        # --- Fallback: daily averages ---
+        if vac_before is None:
+            before_date = work_date_only - timedelta(days=1)
             before_readings = mainline_vacuum[mainline_vacuum['Date'] == before_date]
+            if before_readings.empty:
+                before_date = work_date_only - timedelta(days=2)
+                before_readings = mainline_vacuum[mainline_vacuum['Date'] == before_date]
+            if not before_readings.empty:
+                vac_before = before_readings['Vacuum'].mean()
 
-        if before_readings.empty:
+        if vac_after is None:
+            after_date = work_date_only + timedelta(days=1)
+            after_readings = mainline_vacuum[mainline_vacuum['Date'] == after_date]
+            if after_readings.empty:
+                after_date = work_date_only + timedelta(days=2)
+                after_readings = mainline_vacuum[mainline_vacuum['Date'] == after_date]
+            if not after_readings.empty:
+                vac_after = after_readings['Vacuum'].mean()
+
+        if vac_before is None:
             no_before_count += 1
             continue
-
-        # Get average vacuum for the day after work
-        after_date = work_date_only + timedelta(days=1)
-        after_readings = mainline_vacuum[mainline_vacuum['Date'] == after_date]
-
-        # If no data on day after, try 2 days after
-        if after_readings.empty:
-            after_date = work_date_only + timedelta(days=2)
-            after_readings = mainline_vacuum[mainline_vacuum['Date'] == after_date]
-
-        if after_readings.empty:
+        if vac_after is None:
             no_after_count += 1
             continue
-
-        # Calculate average vacuum for before and after periods
-        vac_before = before_readings['Vacuum'].mean()
-        vac_after = after_readings['Vacuum'].mean()
 
         improvement = vac_after - vac_before
 
@@ -540,7 +575,7 @@ def calculate_employee_effectiveness(personnel_df, vacuum_df):
             'Improvement': improvement
         }
 
-        if 'Hours' in work:
+        if 'Hours' in work.index:
             result['Hours'] = work['Hours']
 
         results.append(result)
@@ -568,6 +603,85 @@ def calculate_employee_effectiveness(personnel_df, vacuum_df):
         empty_df = pd.DataFrame()
         empty_df.attrs['debug_info'] = debug_info
         return empty_df
+
+
+def calculate_repair_costs(personnel_df, repairs_df):
+    """
+    Calculate repair costs by joining personnel work sessions with the repairs tracker.
+
+    Repair Cost = sum of Hours * Rate for personnel entries matching the repair's
+    mainline during the repair period (Date Found to Date Resolved, or now if open).
+    Cost/Tap = Repair Cost / total Taps Put In on that mainline.
+
+    Args:
+        personnel_df: Personnel timesheet data
+        repairs_df: Repairs tracker data
+
+    Returns:
+        DataFrame with columns: Repair ID, Mainline, Repair_Cost, Cost_Per_Tap
+    """
+    from utils import find_column
+
+    if personnel_df.empty or repairs_df.empty:
+        return pd.DataFrame()
+
+    # Need Rate column for cost calculation
+    rate_col = find_column(personnel_df, 'Rate', 'rate', 'pay rate')
+    hours_col = find_column(personnel_df, 'Hours', 'hours')
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    taps_col = find_column(personnel_df, 'Taps Put In', 'taps put in', 'taps_in')
+
+    if not all([hours_col, mainline_col, date_col]):
+        return pd.DataFrame()
+
+    # Prepare personnel data
+    p = personnel_df.copy()
+    p['_date'] = pd.to_datetime(p[date_col], errors='coerce')
+    p['_hours'] = pd.to_numeric(p[hours_col], errors='coerce').fillna(0)
+    p['_mainline'] = p[mainline_col].astype(str).str.strip().str.upper()
+
+    if rate_col:
+        p['_rate'] = pd.to_numeric(p[rate_col], errors='coerce').fillna(0)
+    else:
+        p['_rate'] = 0
+
+    p['_taps'] = pd.to_numeric(p[taps_col], errors='coerce').fillna(0) if taps_col else 0
+
+    results = []
+    now = pd.Timestamp.now()
+
+    for _, repair in repairs_df.iterrows():
+        repair_id = repair.get('Repair ID', '')
+        mainline = str(repair.get('Mainline', '')).strip().upper()
+        date_found = repair.get('Date Found')
+        date_resolved = repair.get('Date Resolved')
+
+        if pd.isna(date_found) or not mainline:
+            results.append({'Repair ID': repair_id, 'Repair_Cost': 0, 'Cost_Per_Tap': 0})
+            continue
+
+        end_date = date_resolved if pd.notna(date_resolved) else now
+
+        # Find personnel entries on this mainline during the repair period
+        mask = (
+            (p['_mainline'] == mainline) &
+            (p['_date'] >= date_found) &
+            (p['_date'] <= end_date)
+        )
+        matched = p[mask]
+
+        repair_cost = (matched['_hours'] * matched['_rate']).sum()
+        total_taps = matched['_taps'].sum()
+        cost_per_tap = repair_cost / total_taps if total_taps > 0 else 0
+
+        results.append({
+            'Repair ID': repair_id,
+            'Repair_Cost': round(repair_cost, 2),
+            'Cost_Per_Tap': round(cost_per_tap, 2)
+        })
+
+    return pd.DataFrame(results)
 
 
 def format_metric_value(value, metric_type):
