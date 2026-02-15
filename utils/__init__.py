@@ -14,7 +14,8 @@ from .helpers import (
     create_status_badge,
     show_data_loading_info,
     show_empty_data_message,
-    get_vacuum_column
+    get_vacuum_column,
+    extract_conductor_system
 )
 
 from .geographic import (
@@ -53,6 +54,7 @@ __all__ = [
     'create_status_badge',
     'show_data_loading_info',
     'show_empty_data_message',
+    'extract_conductor_system',
     # geographic
     'haversine_distance',
     'find_problem_clusters',

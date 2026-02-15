@@ -215,3 +215,16 @@ def show_data_loading_info(vacuum_df, personnel_df):
 def show_empty_data_message(data_type="data"):
     """Show a friendly message when no data is available"""
     st.info(f"📊 No {data_type} available for the selected time period")
+
+
+def extract_conductor_system(mainline):
+    """
+    Extract the conductor system prefix from a mainline name.
+    The conductor system is the 2-4 letter abbreviation that precedes the number.
+    E.g., 'RHAS13' -> 'RHAS', 'AB5' -> 'AB', 'MPC12' -> 'MPC'
+    """
+    import re
+    if pd.isna(mainline) or not str(mainline).strip():
+        return 'Unknown'
+    m = re.match(r'^([A-Za-z]{1,4})', str(mainline).strip())
+    return m.group(1).upper() if m else 'Unknown'
