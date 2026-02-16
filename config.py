@@ -47,6 +47,9 @@ TAP_TARGETS = {"NY": 102000, "VT": 49000}
 # Overtime threshold (hours per week)
 OVERTIME_THRESHOLD = 52
 
+# Tap history variance threshold (%) — flag mainlines with year-over-year change exceeding this
+VARIANCE_THRESHOLD = 20
+
 # Auto-refresh interval (seconds) - set to None to disable
 AUTO_REFRESH_SECONDS = 300  # 5 minutes
 

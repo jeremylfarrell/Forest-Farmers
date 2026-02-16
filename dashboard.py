@@ -36,7 +36,8 @@ from page_modules import (
     maintenance,
     tapping,
     data_quality,
-    repairs_analysis
+    repairs_analysis,
+    tap_history
 )
 
 # ============================================================================
@@ -230,7 +231,8 @@ def render_sidebar():
                 "🌳 Tapping Operations",
                 "👥 Employee Performance",
                 "🛠️ Repairs Analysis",
-                "🌍 Interactive Map"
+                "🌍 Interactive Map",
+                "📈 Tap History"
             ],
             label_visibility="collapsed",
             key="main_pages"
@@ -488,6 +490,8 @@ def main():
         sap_forecast.render(vacuum_df, personnel_df)
     elif page == "📊 Raw Data":
         raw_data.render(vacuum_df, personnel_df)
+    elif page == "📈 Tap History":
+        tap_history.render(personnel_df, vacuum_df)
 
 
 if __name__ == "__main__":

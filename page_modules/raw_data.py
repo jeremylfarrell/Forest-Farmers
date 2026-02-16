@@ -20,7 +20,7 @@ def render(vacuum_df, personnel_df):
     has_personnel_site = 'Site' in personnel_df.columns if not personnel_df.empty else False
 
     # Create tabs for vacuum and personnel data
-    tab1, tab2 = st.tabs(["🔧 Vacuum Data", "👥 Personnel Data"])
+    tab1, tab2, tab3 = st.tabs(["🔧 Vacuum Data", "👥 Personnel Data", "🔍 Duplicate Detection"])
 
     # ============================================================================
     # VACUUM DATA TAB
@@ -298,6 +298,79 @@ def render(vacuum_df, personnel_df):
                 mime="text/csv",
                 use_container_width=True
             )
+
+    # ============================================================================
+    # DUPLICATE DETECTION TAB
+    # ============================================================================
+
+    with tab3:
+        st.subheader("🔍 Duplicate Detection")
+        st.markdown("*Find potential duplicate rows in personnel data — same employee, date, and job code appearing multiple times*")
+
+        if personnel_df.empty:
+            st.warning("No personnel data available")
+        else:
+            emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+            hours_col = find_column(personnel_df, 'Hours', 'hours', 'time')
+            job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode', 'task')
+            date_col = find_column(personnel_df, 'Date', 'date', 'timestamp')
+
+            if emp_col and date_col:
+                # Build the key columns for duplicate detection
+                check_df = personnel_df.copy()
+                key_cols = [emp_col]
+
+                if date_col:
+                    check_df['_date_str'] = check_df[date_col].astype(str).str[:10]
+                    key_cols.append('_date_str')
+                if job_col:
+                    key_cols.append(job_col)
+
+                # Find duplicates
+                check_df['_dup'] = check_df.duplicated(subset=key_cols, keep=False)
+                dups = check_df[check_df['_dup']].copy()
+
+                if len(dups) > 0:
+                    dup_groups = dups.groupby(key_cols).size().reset_index(name='Count')
+                    dup_groups = dup_groups[dup_groups['Count'] > 1]
+                    num_dup_groups = len(dup_groups)
+
+                    st.error(f"Found **{num_dup_groups}** groups of duplicate rows ({len(dups)} total rows)")
+
+                    # Show summary by employee
+                    st.markdown("**Duplicates by Employee:**")
+                    emp_dup_counts = dups.groupby(emp_col).size().reset_index(name='Duplicate Rows')
+                    emp_dup_counts = emp_dup_counts.sort_values('Duplicate Rows', ascending=False)
+                    st.dataframe(emp_dup_counts, use_container_width=True, hide_index=True)
+
+                    st.markdown("---")
+                    st.markdown("**All Duplicate Rows** (rows sharing the same Employee + Date + Job Code):")
+
+                    # Show the actual duplicate rows with relevant columns
+                    show_cols = [c for c in [emp_col, date_col, job_col, hours_col, 'Site'] if c and c in dups.columns]
+                    # Add mainline if available
+                    ml_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline')
+                    if ml_col and ml_col in dups.columns:
+                        show_cols.append(ml_col)
+
+                    display_dups = dups[show_cols].sort_values([emp_col, date_col] if date_col else [emp_col])
+                    st.dataframe(display_dups, use_container_width=True, hide_index=True, height=500)
+
+                    # Impact estimate
+                    if hours_col and hours_col in dups.columns:
+                        # For each dup group, the extra hours = (count-1) * hours per entry
+                        total_extra_hours = 0
+                        for _, group in dups.groupby(key_cols):
+                            if len(group) > 1:
+                                avg_hours = group[hours_col].mean()
+                                extra = avg_hours * (len(group) - 1)
+                                total_extra_hours += extra
+
+                        st.warning(f"Estimated hours impact: **~{total_extra_hours:.1f}h** may be double-counted across all employees")
+                else:
+                    st.success("No duplicate rows detected in personnel data")
+            else:
+                st.warning("Could not find Employee Name and Date columns for duplicate detection")
 
     # Tips at bottom (outside tabs)
     st.divider()

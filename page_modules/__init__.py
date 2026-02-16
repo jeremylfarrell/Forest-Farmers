@@ -7,7 +7,7 @@ Note: This directory is named 'page_modules' (not 'pages') to avoid
 Streamlit's automatic multi-page app detection.
 """
 
-from . import vacuum, tapping, employees, employee_effectiveness, raw_data, sensor_map, sap_forecast, maintenance, data_quality, repairs_analysis
+from . import vacuum, tapping, employees, employee_effectiveness, raw_data, sensor_map, sap_forecast, maintenance, data_quality, repairs_analysis, tap_history
 
 __all__ = [
     'vacuum',
@@ -19,5 +19,6 @@ __all__ = [
     'sap_forecast',
     'maintenance',
     'tapping',
-    'repairs_analysis'
+    'repairs_analysis',
+    'tap_history'
 ]
