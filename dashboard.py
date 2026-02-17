@@ -230,7 +230,7 @@ def render_sidebar():
             [
                 "🌳 Tapping Operations",
                 "👥 Employee Performance",
-                "🛠️ Repairs Analysis",
+                "🛠️ Repairs Needed",
                 "🌍 Interactive Map",
                 "📈 Tap History"
             ],
@@ -480,7 +480,7 @@ def main():
         employee_effectiveness.render(personnel_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, personnel_df)
-    elif page == "🛠️ Repairs Analysis":
+    elif page == "🛠️ Repairs Needed":
         repairs_analysis.render(personnel_df, vacuum_df, repairs_df)
     elif page == "⚠️ Alerts":
         data_quality.render(personnel_df, vacuum_df)

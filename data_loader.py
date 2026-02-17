@@ -348,7 +348,7 @@ def save_repairs_updates(sheet_url, credentials_file, updated_df):
                 row_map[row[repair_id_col]] = i
 
         # Editable columns and their positions
-        editable_cols = ['Status', 'Date Resolved', 'Resolved By', 'Notes']
+        editable_cols = ['Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
         col_indices = {}
         for col in editable_cols:
             if col in headers:

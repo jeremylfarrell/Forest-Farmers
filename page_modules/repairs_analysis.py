@@ -1,7 +1,9 @@
 """
-Repairs Tracker Page Module
+Repairs Needed Page Module
 Interactive repairs management using st.data_editor.
-Manager can update Status, Date Resolved, Resolved By, and Notes directly in the dashboard.
+Manager can update Status, Date Resolved, Resolved By, Repair Cost, and Notes.
+Completed repairs move to a separate tab.
+Cost summary splits by job code: Fixing Identified Issues vs Leak Checking.
 """
 
 import streamlit as st
@@ -10,15 +12,15 @@ import plotly.express as px
 from datetime import datetime
 
 from data_loader import save_repairs_updates
-from metrics import calculate_repair_costs
+from metrics import calculate_repair_cost_breakdown
 from utils import extract_conductor_system
 
 
 def render(personnel_df, vacuum_df=None, repairs_df=None):
-    """Render the repairs tracker page with interactive editing"""
+    """Render the Repairs Needed page with interactive editing"""
 
-    st.title("Repairs Tracker")
-    st.markdown("*Edit repairs directly below — change Status, add resolution details, then click Save.*")
+    st.title("Repairs Needed")
+    st.markdown("*Track and manage identified tubing repairs. Mark repairs as completed when fixed.*")
 
     if repairs_df is None or repairs_df.empty:
         st.info(
@@ -46,6 +48,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     if 'Mainline' in df.columns:
         df['Conductor System'] = df['Mainline'].apply(extract_conductor_system)
 
+    # Ensure Repair Cost column exists
+    if 'Repair Cost' not in df.columns:
+        df['Repair Cost'] = ''
+
     # --- Summary Metrics ---
     st.subheader("Summary")
 
@@ -67,32 +73,72 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
     st.divider()
 
+    # --- Cost Summary by Job Code ---
+    cost_df = calculate_repair_cost_breakdown(personnel_df, df)
+    if not cost_df.empty:
+        st.subheader("Cost Summary")
+        st.caption("Costs split by job code type. Cost/Tap uses **Fixing Issues** cost only.")
+
+        total_fix = cost_df['Fix_Cost'].sum()
+        total_leak = cost_df['LeakCheck_Cost'].sum()
+        total_all = cost_df['Total_Cost'].sum()
+        total_fix_hours = cost_df['Fix_Hours'].sum()
+        total_leak_hours = cost_df['LeakCheck_Hours'].sum()
+
+        # Taps for cost/tap calculation
+        repairs_with_fix = cost_df[cost_df['Fix_Cost'] > 0]
+        avg_cpt = repairs_with_fix['Cost_Per_Tap'].mean() if not repairs_with_fix.empty else 0
+
+        cost_col1, cost_col2, cost_col3, cost_col4 = st.columns(4)
+        with cost_col1:
+            st.metric("Fixing Issues Cost", f"${total_fix:,.2f}",
+                       help="Cost of 'Fixing Identified Tubing Issues' job code — going back to fix known problems")
+        with cost_col2:
+            st.metric("Leak Checking Cost", f"${total_leak:,.2f}",
+                       help="Cost of 'Maple Tubing Inseason Repairs' job code — finding issues that cause low vacuum")
+        with cost_col3:
+            st.metric("Total Cost", f"${total_all:,.2f}")
+        with cost_col4:
+            st.metric("Avg Fix Cost/Tap", f"${avg_cpt:,.2f}",
+                       help="Fixing cost only — does not include leak checking cost")
+
+        with st.expander("Hours breakdown"):
+            st.markdown(f"- **Fixing Issues:** {total_fix_hours:.1f}h (${total_fix:,.2f})")
+            st.markdown(f"- **Leak Checking:** {total_leak_hours:.1f}h (${total_leak:,.2f})")
+
+        # Merge cost data into main df for display
+        df = df.merge(
+            cost_df[['Repair ID', 'Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']],
+            on='Repair ID', how='left'
+        )
+        for c in ['Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']:
+            df[c] = df[c].fillna(0)
+
+    st.divider()
+
     # --- Filters ---
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        status_options = ['All'] + sorted(df['Status'].unique().tolist())
-        selected_status = st.selectbox("Status", status_options, index=0)
-
-    with col2:
         if 'Conductor System' in df.columns:
             systems = ['All'] + sorted([s for s in df['Conductor System'].unique() if s and s != 'Unknown'])
             selected_system = st.selectbox("Conductor System", systems, index=0)
         else:
             selected_system = 'All'
 
-    with col3:
+    with col2:
         mainlines = ['All'] + sorted([m for m in df['Mainline'].unique() if m and str(m) != 'nan' and str(m).strip()])
         selected_mainline = st.selectbox("Mainline", mainlines, index=0)
 
-    with col4:
+    with col3:
         reporters = ['All'] + sorted([r for r in df['Found By'].unique() if r and str(r) != 'nan' and str(r).strip()])
         selected_reporter = st.selectbox("Found By", reporters, index=0)
 
+    with col4:
+        st.write("")
+
     # Apply filters
     filtered = df.copy()
-    if selected_status != 'All':
-        filtered = filtered[filtered['Status'] == selected_status]
     if selected_system != 'All' and 'Conductor System' in filtered.columns:
         filtered = filtered[filtered['Conductor System'] == selected_system]
     if selected_mainline != 'All':
@@ -102,233 +148,42 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
     st.divider()
 
-    # --- Interactive Editor for Open Repairs ---
-    open_repairs = filtered[filtered['Status'] == 'Open'].copy()
+    # --- Tabbed View: Repairs Needed vs Completed ---
+    tab1, tab2 = st.tabs(["🔧 Repairs Needed", "✅ Completed Repairs"])
 
-    if not open_repairs.empty:
-        st.subheader(f"Open Repairs ({len(open_repairs)})")
-        st.caption("Edit Status, Date Resolved, Resolved By, or Notes directly in the table. Click **Save Changes** when done.")
+    # ==========================================
+    # TAB 1: OPEN / NEEDED REPAIRS (editable)
+    # ==========================================
+    with tab1:
+        open_repairs = filtered[filtered['Status'] == 'Open'].copy()
 
-        open_repairs = open_repairs.sort_values('Age (Days)', ascending=False)
+        if not open_repairs.empty:
+            st.subheader(f"Open Repairs ({len(open_repairs)})")
+            st.caption("Edit Status, Date Resolved, Resolved By, Repair Cost, or Notes. Click **Save Changes** when done.")
 
-        # Prepare editor columns
-        editor_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
-                       'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Notes']
-        editor_cols = [c for c in editor_cols if c in open_repairs.columns]
+            open_repairs = open_repairs.sort_values('Age (Days)', ascending=False)
 
-        edit_df = open_repairs[editor_cols].copy()
+            editor_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
+                           'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
+            editor_cols = [c for c in editor_cols if c in open_repairs.columns]
 
-        # Format Date Found for display but keep as string for editor
-        if 'Date Found' in edit_df.columns:
-            edit_df['Date Found'] = edit_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            edit_df = open_repairs[editor_cols].copy()
 
-        # Ensure Date Resolved is string for the editor
-        if 'Date Resolved' in edit_df.columns:
-            edit_df['Date Resolved'] = edit_df['Date Resolved'].apply(
-                lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
-            )
-
-        # Ensure text columns are strings
-        for col in ['Resolved By', 'Notes']:
-            if col in edit_df.columns:
-                edit_df[col] = edit_df[col].fillna('').astype(str)
-
-        column_config = {
-            'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
-            'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
-            'Age (Days)': st.column_config.NumberColumn('Age (Days)', disabled=True),
-            'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
-            'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
-            'Found By': st.column_config.TextColumn('Found By', disabled=True),
-            'Status': st.column_config.SelectboxColumn(
-                'Status', options=['Open', 'Completed', 'Deferred'], required=True
-            ),
-            'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
-            'Resolved By': st.column_config.TextColumn('Resolved By'),
-            'Notes': st.column_config.TextColumn('Notes', width='medium'),
-        }
-
-        edited_open = st.data_editor(
-            edit_df,
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=True,
-            height=min(400 + len(edit_df) * 10, 800),
-            key="open_repairs_editor"
-        )
-
-        # Save button for open repairs
-        if st.button("Save Changes", key="save_open", type="primary"):
-            _save_edits(edited_open)
-
-    else:
-        if selected_status == 'All' or selected_status == 'Open':
-            st.success("No open repairs!")
-
-    st.divider()
-
-    # --- Charts ---
-    chart_col1, chart_col2 = st.columns(2)
-
-    with chart_col1:
-        st.subheader("Repairs by Conductor System")
-        if 'Conductor System' in df.columns:
-            open_by_system = df[df['Status'] == 'Open'].groupby('Conductor System').size().reset_index(name='Count')
-            if not open_by_system.empty:
-                open_by_system = open_by_system.sort_values('Count', ascending=True)
-                fig = px.bar(open_by_system, x='Count', y='Conductor System', orientation='h',
-                             color='Count', color_continuous_scale=['#4CAF50', '#ff6b6b'])
-                fig.update_layout(height=max(300, len(open_by_system) * 30 + 100),
-                                  showlegend=False, coloraxis_showscale=False)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("No open repairs to chart")
-        else:
-            st.info("Mainline data not available for grouping")
-
-    with chart_col2:
-        st.subheader("Repairs by Reporter")
-        by_reporter = df[df['Status'] == 'Open'].groupby('Found By').size().reset_index(name='Count')
-        if not by_reporter.empty:
-            by_reporter = by_reporter.sort_values('Count', ascending=True)
-            fig = px.bar(by_reporter, x='Count', y='Found By', orientation='h',
-                         color='Count', color_continuous_scale=['#2196F3', '#1565C0'])
-            fig.update_layout(height=max(300, len(by_reporter) * 30 + 100),
-                              showlegend=False, coloraxis_showscale=False)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No open repairs to chart")
-
-    st.divider()
-
-    # --- Repair Detail Table ---
-    st.subheader("📋 Repair Detail")
-
-    detail_df = filtered.copy()
-
-    # Calculate and merge repair costs
-    cost_df = calculate_repair_costs(personnel_df, df)
-    if not cost_df.empty and 'Repair ID' in detail_df.columns:
-        detail_df = detail_df.merge(cost_df, on='Repair ID', how='left')
-        detail_df['Repair_Cost'] = detail_df['Repair_Cost'].fillna(0)
-        detail_df['Cost_Per_Tap'] = detail_df['Cost_Per_Tap'].fillna(0)
-
-    detail_cols = []
-    detail_names = []
-
-    if 'Conductor System' in detail_df.columns:
-        detail_cols.append('Conductor System')
-        detail_names.append('System')
-    if 'Mainline' in detail_df.columns:
-        detail_cols.append('Mainline')
-        detail_names.append('Mainline')
-    if 'Description' in detail_df.columns:
-        detail_cols.append('Description')
-        detail_names.append('Issue')
-    if 'Found By' in detail_df.columns:
-        detail_cols.append('Found By')
-        detail_names.append('Reported By')
-    if 'Date Found' in detail_df.columns:
-        detail_cols.append('Date Found')
-        detail_names.append('Date Found')
-    if 'Resolved By' in detail_df.columns:
-        detail_cols.append('Resolved By')
-        detail_names.append('Fixed By')
-
-    # Calculate days to fix
-    if 'Date Found' in detail_df.columns and 'Date Resolved' in detail_df.columns:
-        detail_df['Days to Fix'] = (detail_df['Date Resolved'] - detail_df['Date Found']).dt.days
-        detail_df['Days to Fix'] = detail_df['Days to Fix'].apply(
-            lambda x: f"{int(x)}d" if pd.notna(x) and x >= 0 else "Open"
-        )
-        detail_cols.append('Days to Fix')
-        detail_names.append('Days to Fix')
-
-    if 'Status' in detail_df.columns:
-        detail_cols.append('Status')
-        detail_names.append('Status')
-
-    if 'Repair_Cost' in detail_df.columns:
-        detail_cols.append('Repair_Cost')
-        detail_names.append('Repair Cost')
-    if 'Cost_Per_Tap' in detail_df.columns:
-        detail_cols.append('Cost_Per_Tap')
-        detail_names.append('Cost/Tap')
-
-    if detail_cols:
-        detail_display = detail_df[detail_cols].copy()
-        if 'Date Found' in detail_display.columns:
-            detail_display['Date Found'] = detail_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
-        if 'Repair_Cost' in detail_display.columns:
-            detail_display['Repair_Cost'] = detail_display['Repair_Cost'].apply(lambda x: f"${x:,.2f}")
-        if 'Cost_Per_Tap' in detail_display.columns:
-            detail_display['Cost_Per_Tap'] = detail_display['Cost_Per_Tap'].apply(lambda x: f"${x:,.2f}")
-        detail_display.columns = detail_names
-        detail_display = detail_display.sort_values('Date Found', ascending=False) if 'Date Found' in detail_names else detail_display
-        st.dataframe(detail_display, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # --- Resolution Metrics ---
-    completed = df[df['Status'] == 'Completed'].copy()
-    if not completed.empty and 'Date Resolved' in completed.columns and 'Date Found' in completed.columns:
-        valid_resolved = completed.dropna(subset=['Date Resolved', 'Date Found'])
-        if not valid_resolved.empty:
-            valid_resolved['Resolution Days'] = (valid_resolved['Date Resolved'] - valid_resolved['Date Found']).dt.days
-
-            st.subheader("Resolution Metrics")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                avg_days = valid_resolved['Resolution Days'].mean()
-                st.metric("Avg Days to Resolve", f"{avg_days:.1f}")
-            with col2:
-                oldest_open = df[df['Status'] == 'Open']['Age (Days)'].max() if open_count > 0 else 0
-                st.metric("Oldest Open Repair", f"{oldest_open} days")
-            with col3:
-                st.metric("Resolved This Month",
-                          len(valid_resolved[valid_resolved['Date Resolved'] >= pd.Timestamp.now().replace(day=1)]))
-
-            st.divider()
-
-    # --- Cost Summary ---
-    if 'Repair_Cost' in detail_df.columns and detail_df['Repair_Cost'].sum() > 0:
-        st.subheader("Cost Summary")
-        cost_col1, cost_col2, cost_col3 = st.columns(3)
-        with cost_col1:
-            total_cost = detail_df['Repair_Cost'].sum()
-            st.metric("Total Repair Cost", f"${total_cost:,.2f}")
-        with cost_col2:
-            repairs_with_cost = detail_df[detail_df['Repair_Cost'] > 0]
-            avg_cost = repairs_with_cost['Repair_Cost'].mean() if not repairs_with_cost.empty else 0
-            st.metric("Avg Cost / Repair", f"${avg_cost:,.2f}")
-        with cost_col3:
-            avg_cpt = repairs_with_cost['Cost_Per_Tap'].mean() if not repairs_with_cost.empty else 0
-            st.metric("Avg Cost / Tap", f"${avg_cpt:,.2f}")
-        st.divider()
-
-    # --- Completed Repairs (editable) ---
-    if not completed.empty:
-        with st.expander(f"Completed Repairs ({len(completed)})"):
-            comp_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
-                         'Status', 'Date Resolved', 'Resolved By', 'Notes']
-            comp_cols = [c for c in comp_cols if c in completed.columns]
-            comp_edit = completed[comp_cols].copy()
-
-            if 'Date Found' in comp_edit.columns:
-                comp_edit['Date Found'] = comp_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
-            if 'Date Resolved' in comp_edit.columns:
-                comp_edit['Date Resolved'] = comp_edit['Date Resolved'].apply(
+            if 'Date Found' in edit_df.columns:
+                edit_df['Date Found'] = edit_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            if 'Date Resolved' in edit_df.columns:
+                edit_df['Date Resolved'] = edit_df['Date Resolved'].apply(
                     lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
                 )
-            for col in ['Resolved By', 'Notes']:
-                if col in comp_edit.columns:
-                    comp_edit[col] = comp_edit[col].fillna('').astype(str)
 
-            comp_edit = comp_edit.sort_values('Date Found', ascending=False) if 'Date Found' in comp_edit.columns else comp_edit
+            for col in ['Resolved By', 'Notes', 'Repair Cost']:
+                if col in edit_df.columns:
+                    edit_df[col] = edit_df[col].fillna('').astype(str)
 
-            comp_config = {
+            column_config = {
                 'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
                 'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
+                'Age (Days)': st.column_config.NumberColumn('Age (Days)', disabled=True),
                 'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
                 'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
                 'Found By': st.column_config.TextColumn('Found By', disabled=True),
@@ -337,26 +192,154 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 ),
                 'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
                 'Resolved By': st.column_config.TextColumn('Resolved By'),
+                'Repair Cost': st.column_config.TextColumn('Repair Cost', help='Approx cost to fix (e.g. 45.50)'),
                 'Notes': st.column_config.TextColumn('Notes', width='medium'),
             }
 
-            edited_comp = st.data_editor(
-                comp_edit,
-                column_config=comp_config,
+            edited_open = st.data_editor(
+                edit_df,
+                column_config=column_config,
                 use_container_width=True,
                 hide_index=True,
-                key="completed_repairs_editor"
+                height=min(400 + len(edit_df) * 10, 800),
+                key="open_repairs_editor"
             )
 
-            if st.button("Save Changes", key="save_completed", type="primary"):
-                _save_edits(edited_comp)
+            if st.button("Save Changes", key="save_open", type="primary"):
+                _save_edits(edited_open)
 
-    # --- Deferred Repairs (editable) ---
+        else:
+            st.success("No open repairs! All issues have been resolved.")
+
+        st.divider()
+
+        # Charts for open repairs
+        open_all = df[df['Status'] == 'Open']
+        if not open_all.empty:
+            chart_col1, chart_col2 = st.columns(2)
+
+            with chart_col1:
+                st.subheader("By Conductor System")
+                if 'Conductor System' in open_all.columns:
+                    open_by_system = open_all.groupby('Conductor System').size().reset_index(name='Count')
+                    if not open_by_system.empty:
+                        open_by_system = open_by_system.sort_values('Count', ascending=True)
+                        fig = px.bar(open_by_system, x='Count', y='Conductor System', orientation='h',
+                                     color='Count', color_continuous_scale=['#4CAF50', '#ff6b6b'])
+                        fig.update_layout(height=max(300, len(open_by_system) * 30 + 100),
+                                          showlegend=False, coloraxis_showscale=False)
+                        st.plotly_chart(fig, use_container_width=True)
+
+            with chart_col2:
+                st.subheader("By Reporter")
+                by_reporter = open_all.groupby('Found By').size().reset_index(name='Count')
+                if not by_reporter.empty:
+                    by_reporter = by_reporter.sort_values('Count', ascending=True)
+                    fig = px.bar(by_reporter, x='Count', y='Found By', orientation='h',
+                                 color='Count', color_continuous_scale=['#2196F3', '#1565C0'])
+                    fig.update_layout(height=max(300, len(by_reporter) * 30 + 100),
+                                      showlegend=False, coloraxis_showscale=False)
+                    st.plotly_chart(fig, use_container_width=True)
+
+    # ==========================================
+    # TAB 2: COMPLETED REPAIRS
+    # ==========================================
+    with tab2:
+        completed = filtered[filtered['Status'] == 'Completed'].copy()
+
+        if not completed.empty:
+            st.subheader(f"Completed Repairs ({len(completed)})")
+
+            if 'Date Resolved' in completed.columns and 'Date Found' in completed.columns:
+                valid_resolved = completed.dropna(subset=['Date Resolved', 'Date Found'])
+                if not valid_resolved.empty:
+                    valid_resolved['Resolution Days'] = (valid_resolved['Date Resolved'] - valid_resolved['Date Found']).dt.days
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        avg_days = valid_resolved['Resolution Days'].mean()
+                        st.metric("Avg Days to Resolve", f"{avg_days:.1f}")
+                    with col2:
+                        st.metric("Total Completed", len(completed))
+                    with col3:
+                        this_month = len(valid_resolved[valid_resolved['Date Resolved'] >= pd.Timestamp.now().replace(day=1)])
+                        st.metric("Resolved This Month", this_month)
+
+                    st.divider()
+
+            detail_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
+                           'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
+            if 'Fix_Cost' in completed.columns:
+                detail_cols.extend(['Fix_Cost', 'Cost_Per_Tap'])
+            detail_cols = [c for c in detail_cols if c in completed.columns]
+
+            comp_display = completed[detail_cols].copy()
+            if 'Date Found' in comp_display.columns:
+                comp_display['Date Found'] = comp_display['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+            if 'Date Resolved' in comp_display.columns:
+                comp_display['Date Resolved'] = comp_display['Date Resolved'].apply(
+                    lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+                )
+            if 'Fix_Cost' in comp_display.columns:
+                comp_display['Fix_Cost'] = comp_display['Fix_Cost'].apply(lambda x: f"${x:,.2f}" if x > 0 else "")
+            if 'Cost_Per_Tap' in comp_display.columns:
+                comp_display['Cost_Per_Tap'] = comp_display['Cost_Per_Tap'].apply(lambda x: f"${x:,.2f}" if x > 0 else "")
+
+            comp_display = comp_display.sort_values('Date Resolved' if 'Date Resolved' in comp_display.columns else 'Date Found',
+                                                     ascending=False)
+
+            st.dataframe(comp_display, use_container_width=True, hide_index=True, height=500)
+
+            with st.expander("Edit completed repairs (re-open, change details)"):
+                comp_edit_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
+                                  'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
+                comp_edit_cols = [c for c in comp_edit_cols if c in completed.columns]
+                comp_edit = completed[comp_edit_cols].copy()
+
+                if 'Date Found' in comp_edit.columns:
+                    comp_edit['Date Found'] = comp_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
+                if 'Date Resolved' in comp_edit.columns:
+                    comp_edit['Date Resolved'] = comp_edit['Date Resolved'].apply(
+                        lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+                    )
+                for col in ['Resolved By', 'Notes', 'Repair Cost']:
+                    if col in comp_edit.columns:
+                        comp_edit[col] = comp_edit[col].fillna('').astype(str)
+
+                comp_config = {
+                    'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
+                    'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
+                    'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
+                    'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
+                    'Found By': st.column_config.TextColumn('Found By', disabled=True),
+                    'Status': st.column_config.SelectboxColumn(
+                        'Status', options=['Open', 'Completed', 'Deferred'], required=True
+                    ),
+                    'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
+                    'Resolved By': st.column_config.TextColumn('Resolved By'),
+                    'Repair Cost': st.column_config.TextColumn('Repair Cost', help='Approx cost to fix'),
+                    'Notes': st.column_config.TextColumn('Notes', width='medium'),
+                }
+
+                edited_comp = st.data_editor(
+                    comp_edit,
+                    column_config=comp_config,
+                    use_container_width=True,
+                    hide_index=True,
+                    key="completed_repairs_editor"
+                )
+
+                if st.button("Save Changes", key="save_completed", type="primary"):
+                    _save_edits(edited_comp)
+        else:
+            st.info("No completed repairs yet.")
+
+    # --- Deferred Repairs ---
     deferred = filtered[filtered['Status'] == 'Deferred']
     if not deferred.empty:
         with st.expander(f"Deferred Repairs ({len(deferred)})"):
             def_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
-                        'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Notes']
+                        'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
             def_cols = [c for c in def_cols if c in deferred.columns]
             def_edit = deferred[def_cols].copy()
 
@@ -366,7 +349,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 def_edit['Date Resolved'] = def_edit['Date Resolved'].apply(
                     lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
                 )
-            for col in ['Resolved By', 'Notes']:
+            for col in ['Resolved By', 'Notes', 'Repair Cost']:
                 if col in def_edit.columns:
                     def_edit[col] = def_edit[col].fillna('').astype(str)
 
@@ -382,6 +365,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 ),
                 'Date Resolved': st.column_config.TextColumn('Date Resolved', help='YYYY-MM-DD'),
                 'Resolved By': st.column_config.TextColumn('Resolved By'),
+                'Repair Cost': st.column_config.TextColumn('Repair Cost', help='Approx cost to fix'),
                 'Notes': st.column_config.TextColumn('Notes', width='medium'),
             }
 
@@ -397,23 +381,30 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 _save_edits(edited_def)
 
     # --- How to Use ---
-    with st.expander("How to use the Repairs Tracker"):
+    with st.expander("How to use Repairs Needed"):
         st.markdown("""
         **Repairs are auto-populated from TSheets** each day when workers log issues
         in the "Repairs needed" field.
 
-        **To manage repairs directly in this dashboard:**
+        **To resolve a repair:**
 
-        1. **Mark as Completed:** Change the `Status` dropdown from `Open` to `Completed`,
-           fill in `Date Resolved` (YYYY-MM-DD) and optionally `Resolved By`
-        2. **Defer a repair:** Change `Status` to `Deferred` and add a note explaining why
-        3. **Add context:** Use the `Notes` column for any additional information
-        4. **Save:** Click the **Save Changes** button to write your updates to Google Sheets
+        1. Change the `Status` dropdown from `Open` to `Completed`
+        2. Fill in `Date Resolved` (YYYY-MM-DD) and `Resolved By`
+        3. Optionally enter an approx `Repair Cost` (e.g. "45.50")
+        4. Click **Save Changes** — the repair moves to the Completed tab
+
+        **Cost Summary:**
+        - **Fixing Issues Cost** = hours x rate for "Fixing Identified Tubing Issues" job code
+          (going back to fix a known problem that was called out)
+        - **Leak Checking Cost** = hours x rate for "Maple Tubing Inseason Repairs" job code
+          (going out to find issues causing low vacuum)
+        - **Cost/Tap** uses only the Fixing cost — not the leak checking cost
 
         **Tips:**
         - Changes are NOT saved until you click **Save Changes**
+        - If a guy fixes something but doesn't make a TSheets entry, use `Repair Cost`
+          to manually enter the approx cost
         - The dashboard refreshes data every hour or on manual refresh
-        - You can still edit directly in Google Sheets if preferred
         """)
 
 
@@ -423,7 +414,6 @@ def _save_edits(edited_df):
         st.error("Cannot save: Repair ID column missing")
         return
 
-    # Get sheet config - try secrets first, then .env
     sheet_url = None
     credentials_file = 'credentials.json'
 

@@ -684,6 +684,118 @@ def calculate_repair_costs(personnel_df, repairs_df):
     return pd.DataFrame(results)
 
 
+def calculate_repair_cost_breakdown(personnel_df, repairs_df):
+    """
+    Calculate repair costs split by job code type:
+    - Fixing Identified Tubing Issues: cost of going back to fix known problems
+    - Leak Checking: cost of finding issues (inseason repairs)
+
+    Cost/Tap uses ONLY the Fixing cost (not leak checking).
+
+    Args:
+        personnel_df: Personnel timesheet data
+        repairs_df: Repairs tracker data
+
+    Returns:
+        DataFrame with columns: Repair ID, Fix_Cost, LeakCheck_Cost, Total_Cost,
+                                Fix_Hours, LeakCheck_Hours, Cost_Per_Tap
+    """
+    from utils import find_column
+
+    if personnel_df.empty or repairs_df.empty:
+        return pd.DataFrame()
+
+    # Column lookups
+    rate_col = find_column(personnel_df, 'Rate', 'rate', 'pay rate')
+    hours_col = find_column(personnel_df, 'Hours', 'hours')
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode')
+    taps_col = find_column(personnel_df, 'Taps Put In', 'taps put in', 'taps_in')
+
+    if not all([hours_col, mainline_col, date_col, job_col]):
+        return pd.DataFrame()
+
+    # Job code keywords
+    fixing_keywords = ['fixing identified tubing', 'already identified tubing issue']
+    leak_keywords = ['inseason tubing repair', 'maple tubing inseason', 'leak check']
+
+    # Prepare personnel data
+    p = personnel_df.copy()
+    p['_date'] = pd.to_datetime(p[date_col], errors='coerce')
+    p['_hours'] = pd.to_numeric(p[hours_col], errors='coerce').fillna(0)
+    p['_mainline'] = p[mainline_col].astype(str).str.strip().str.upper()
+    p['_job'] = p[job_col].astype(str).str.lower()
+
+    if rate_col:
+        p['_rate'] = pd.to_numeric(p[rate_col], errors='coerce').fillna(0)
+    else:
+        p['_rate'] = 0
+
+    p['_taps'] = pd.to_numeric(p[taps_col], errors='coerce').fillna(0) if taps_col else 0
+
+    # Classify job type
+    p['_is_fixing'] = p['_job'].apply(
+        lambda j: any(kw in j for kw in fixing_keywords)
+    )
+    p['_is_leak'] = p['_job'].apply(
+        lambda j: any(kw in j for kw in leak_keywords) and not any(kw in j for kw in fixing_keywords)
+    )
+
+    results = []
+    now = pd.Timestamp.now()
+
+    for _, repair in repairs_df.iterrows():
+        repair_id = repair.get('Repair ID', '')
+        mainline = str(repair.get('Mainline', '')).strip().upper()
+        date_found = repair.get('Date Found')
+        date_resolved = repair.get('Date Resolved')
+
+        if pd.isna(date_found) or not mainline:
+            results.append({
+                'Repair ID': repair_id, 'Fix_Cost': 0, 'LeakCheck_Cost': 0,
+                'Total_Cost': 0, 'Fix_Hours': 0, 'LeakCheck_Hours': 0,
+                'Cost_Per_Tap': 0
+            })
+            continue
+
+        end_date = date_resolved if pd.notna(date_resolved) else now
+
+        # Find personnel entries on this mainline during the repair period
+        mask = (
+            (p['_mainline'] == mainline) &
+            (p['_date'] >= date_found) &
+            (p['_date'] <= end_date)
+        )
+        matched = p[mask]
+
+        # Split by job type
+        fixing = matched[matched['_is_fixing']]
+        leak_check = matched[matched['_is_leak']]
+
+        fix_cost = (fixing['_hours'] * fixing['_rate']).sum()
+        fix_hours = fixing['_hours'].sum()
+        leak_cost = (leak_check['_hours'] * leak_check['_rate']).sum()
+        leak_hours = leak_check['_hours'].sum()
+        total_cost = fix_cost + leak_cost
+
+        # Cost per tap uses only the fixing cost
+        total_taps = matched['_taps'].sum()
+        cost_per_tap = fix_cost / total_taps if total_taps > 0 else 0
+
+        results.append({
+            'Repair ID': repair_id,
+            'Fix_Cost': round(fix_cost, 2),
+            'LeakCheck_Cost': round(leak_cost, 2),
+            'Total_Cost': round(total_cost, 2),
+            'Fix_Hours': round(fix_hours, 1),
+            'LeakCheck_Hours': round(leak_hours, 1),
+            'Cost_Per_Tap': round(cost_per_tap, 2)
+        })
+
+    return pd.DataFrame(results)
+
+
 def format_metric_value(value, metric_type):
     """
     Format a metric value for display
