@@ -538,6 +538,23 @@ def process_personnel_data(df):
     if 'Date' in df.columns:
         df = df.dropna(subset=['Date'])
 
+    # Deduplicate: TSheets sync can append updated versions of the same entry.
+    # Key on Employee Name + Date + Job; keep the last occurrence (most recent sync).
+    dedup_cols = []
+    if 'Employee Name' in df.columns:
+        dedup_cols.append('Employee Name')
+    if 'Date' in df.columns:
+        dedup_cols.append('Date')
+    if 'Job' in df.columns:
+        dedup_cols.append('Job')
+    if len(dedup_cols) >= 2:
+        before = len(df)
+        df = df.drop_duplicates(subset=dedup_cols, keep='last')
+        dropped = before - len(df)
+        if dropped > 0 and config.DEBUG_MODE:
+            import streamlit as _st
+            _st.info(f"Dedup: removed {dropped} duplicate personnel rows")
+
     return df
 
 
