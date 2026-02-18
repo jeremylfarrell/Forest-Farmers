@@ -311,7 +311,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v7.0 Clean Sidebar | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v8.0 Repairs & Tap History | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("📊 Loading last 60 days")
         st.caption("💾 Data cached for 1 hour")
 
