@@ -412,6 +412,18 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         - If a guy fixes something but doesn't make a TSheets entry, use `Repair Cost`
           to manually enter the approx cost
         - The dashboard refreshes data every hour or on manual refresh
+
+        **Job Code Matching:**
+        The dashboard matches TSheets job codes using keyword substrings (case-insensitive),
+        so full job names like "Fixing Identified Tubing Issues - VT - 241114" are matched.
+
+        Current keywords:
+        - **Fixing:** "fixing identified tubing", "already identified tubing issue"
+        - **Leak Checking:** "inseason tubing repair", "maple tubing inseason", "leak check"
+
+        If additional job codes need to be recognized (e.g., clearing trees, etc.),
+        update the keyword lists in `metrics.py → calculate_repair_cost_breakdown()`
+        and `repairs_analysis.py → _auto_complete_repairs()`.
         """)
 
 
