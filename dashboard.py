@@ -18,7 +18,7 @@ from datetime import datetime
 import config
 
 # Import data loading
-from data_loader import load_all_vacuum_data, load_all_personnel_data, load_repairs_tracker
+from data_loader import load_all_vacuum_data, load_all_personnel_data, load_repairs_tracker, load_approved_personnel, merge_approved_data
 
 # Import utility functions
 from utils import find_column
@@ -37,7 +37,8 @@ from page_modules import (
     tapping,
     data_quality,
     repairs_analysis,
-    tap_history
+    tap_history,
+    manager_review
 )
 
 # ============================================================================
@@ -232,7 +233,8 @@ def render_sidebar():
                 "👥 Employee Performance",
                 "🛠️ Repairs Needed",
                 "🌍 Interactive Map",
-                "📈 Tap History"
+                "📈 Tap History",
+                "📋 Manager Data Review"
             ],
             label_visibility="collapsed",
             key="main_pages"
@@ -311,7 +313,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v8.0 Repairs & Tap History | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.0 Manager Data Review | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("📊 Loading last 60 days")
         st.caption("💾 Data cached for 1 hour")
 
@@ -361,6 +363,10 @@ def load_data(days_to_load):
             vacuum_df = load_all_vacuum_data(ny_vacuum_url, vt_vacuum_url, credentials, days=days_to_load)
             personnel_df = load_all_personnel_data(personnel_url, credentials)
             repairs_df = load_repairs_tracker(personnel_url, credentials)
+
+            # Merge manager-approved overrides into personnel data
+            approved_df = load_approved_personnel(personnel_url, credentials)
+            personnel_df = merge_approved_data(personnel_df, approved_df)
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
@@ -492,6 +498,8 @@ def main():
         raw_data.render(vacuum_df, personnel_df)
     elif page == "📈 Tap History":
         tap_history.render(personnel_df, vacuum_df)
+    elif page == "📋 Manager Data Review":
+        manager_review.render(personnel_df, vacuum_df)
 
 
 if __name__ == "__main__":

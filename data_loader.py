@@ -387,6 +387,228 @@ def save_repairs_updates(sheet_url, credentials_file, updated_df):
         return False, f"Error saving: {e}"
 
 
+# ===========================================================================
+# APPROVED PERSONNEL DATA (Manager Data Review workflow)
+# ===========================================================================
+
+@st.cache_data(ttl=3600, show_spinner="Loading approved personnel data...")
+def load_approved_personnel(sheet_url, credentials_file):
+    """
+    Load manager-approved personnel data from the 'approved_personnel' tab.
+    Returns empty DataFrame if the tab doesn't exist yet (graceful degradation).
+    """
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        approved_ws = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'approved_personnel':
+                approved_ws = ws
+                break
+
+        if approved_ws is None:
+            return pd.DataFrame()
+
+        raw = approved_ws.get_all_values()
+        if not raw or len(raw) <= 1:
+            return pd.DataFrame()
+
+        headers = raw[0]
+        rows = [r for r in raw[1:] if any(cell != '' for cell in r)]
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(rows, columns=headers)
+
+        # Type conversions (mirrors process_personnel_data but no dedup/site parsing)
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        if 'Hours' in df.columns:
+            df['Hours'] = pd.to_numeric(df['Hours'], errors='coerce').fillna(0)
+        if 'Rate' in df.columns:
+            df['Rate'] = pd.to_numeric(df['Rate'], errors='coerce').fillna(0)
+        for field in ['Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed']:
+            if field in df.columns:
+                df[field] = pd.to_numeric(df[field], errors='coerce').fillna(0)
+        for clock_col in ['Clock In', 'Clock Out']:
+            if clock_col in df.columns:
+                df[clock_col] = pd.to_datetime(df[clock_col], errors='coerce')
+        if 'Approved Date' in df.columns:
+            df['Approved Date'] = pd.to_datetime(df['Approved Date'], errors='coerce')
+
+        return df
+
+    except Exception as e:
+        # Don't show warning on every page load — just return empty
+        return pd.DataFrame()
+
+
+def merge_approved_data(raw_df, approved_df):
+    """
+    Merge raw personnel data with manager-approved overrides.
+    For rows where (Employee Name, Date, Job) exists in approved_df,
+    use the approved version. Otherwise keep the raw version.
+    Adds 'Approval Status' column ('Approved' or 'Pending').
+    """
+    if raw_df.empty:
+        return raw_df
+
+    if approved_df.empty:
+        result = raw_df.copy()
+        result['Approval Status'] = 'Pending'
+        return result
+
+    # Check required columns exist
+    required = ['Employee Name', 'Date', 'Job']
+    for col in required:
+        if col not in raw_df.columns or col not in approved_df.columns:
+            result = raw_df.copy()
+            result['Approval Status'] = 'Pending'
+            return result
+
+    def make_key(df):
+        emp = df['Employee Name'].astype(str)
+        date = df['Date'].dt.strftime('%Y-%m-%d').fillna('')
+        job = df['Job'].astype(str)
+        return emp + '|' + date + '|' + job
+
+    raw = raw_df.copy()
+    approved = approved_df.copy()
+
+    raw['_merge_key'] = make_key(raw)
+    approved['_merge_key'] = make_key(approved)
+
+    approved_keys = set(approved['_merge_key'].values)
+
+    # Raw rows NOT overridden by approved data
+    pending_rows = raw[~raw['_merge_key'].isin(approved_keys)].copy()
+    pending_rows['Approval Status'] = 'Pending'
+
+    # Approved rows
+    approved['Approval Status'] = 'Approved'
+
+    # Combine: pending raw rows + approved rows
+    merged = pd.concat([pending_rows, approved], ignore_index=True)
+    merged = merged.drop(columns=['_merge_key'], errors='ignore')
+
+    return merged
+
+
+def save_approved_personnel(sheet_url, credentials_file, approved_df):
+    """
+    Save manager-approved personnel data to the 'approved_personnel' tab.
+    Creates the tab if it doesn't exist. Updates existing rows by
+    (Employee Name, Date, Job) key; appends new rows.
+    Returns (success: bool, message: str).
+    """
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        # Find or create the approved_personnel tab
+        approved_ws = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'approved_personnel':
+                approved_ws = ws
+                break
+
+        # Define the columns for the approved tab
+        approved_columns = [
+            'Employee Name', 'Date', 'Hours', 'Rate', 'Job', 'mainline.',
+            'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed',
+            'Notes', 'Site', 'Clock In', 'Clock Out', 'Approved Date', 'Approved By'
+        ]
+
+        if approved_ws is None:
+            approved_ws = sheet.add_worksheet(
+                title='approved_personnel', rows=1000, cols=len(approved_columns)
+            )
+            approved_ws.update('A1', [approved_columns], value_input_option='USER_ENTERED')
+            existing_data = []
+        else:
+            existing_data = approved_ws.get_all_values()
+            if not existing_data:
+                approved_ws.update('A1', [approved_columns], value_input_option='USER_ENTERED')
+                existing_data = [approved_columns]
+
+        # Build key map for existing rows: (Employee Name|Date|Job) -> row number
+        row_map = {}
+        if existing_data and len(existing_data) > 1:
+            headers = existing_data[0]
+            try:
+                emp_idx = headers.index('Employee Name')
+                date_idx = headers.index('Date')
+                job_idx = headers.index('Job')
+            except ValueError:
+                emp_idx = date_idx = job_idx = None
+
+            if all(idx is not None for idx in [emp_idx, date_idx, job_idx]):
+                for i, row in enumerate(existing_data[1:], start=2):
+                    if len(row) > max(emp_idx, date_idx, job_idx):
+                        key = f"{row[emp_idx]}|{row[date_idx]}|{row[job_idx]}"
+                        row_map[key] = i
+
+        # Prepare data for writing
+        cells_to_update = []
+        rows_to_append = []
+
+        for _, row in approved_df.iterrows():
+            # Build the key
+            emp = str(row.get('Employee Name', ''))
+            date_val = row.get('Date', '')
+            if isinstance(date_val, pd.Timestamp) and not pd.isna(date_val):
+                date_str = date_val.strftime('%Y-%m-%d')
+            else:
+                date_str = str(date_val) if date_val else ''
+            job = str(row.get('Job', ''))
+            key = f"{emp}|{date_str}|{job}"
+
+            # Build the row values in column order
+            row_values = []
+            for col in approved_columns:
+                val = row.get(col, '')
+                if pd.isna(val) or val is None:
+                    val = ''
+                elif isinstance(val, pd.Timestamp):
+                    if col in ('Clock In', 'Clock Out'):
+                        val = val.strftime('%Y-%m-%d %H:%M') if not pd.isna(val) else ''
+                    else:
+                        val = val.strftime('%Y-%m-%d') if not pd.isna(val) else ''
+                else:
+                    val = str(val)
+                row_values.append(val)
+
+            if key in row_map:
+                # Update existing row
+                sheet_row = row_map[key]
+                for col_idx, val in enumerate(row_values):
+                    cells_to_update.append(
+                        gspread.Cell(sheet_row, col_idx + 1, val)
+                    )
+            else:
+                rows_to_append.append(row_values)
+
+        # Execute batch update for existing rows
+        if cells_to_update:
+            approved_ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+
+        # Append new rows
+        if rows_to_append:
+            approved_ws.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+
+        # Clear cache so next load picks up changes
+        st.cache_data.clear()
+
+        total = len(approved_df)
+        appended = len(rows_to_append)
+        updated = total - appended
+        return True, f"Approved {total} rows ({appended} new, {updated} updated)"
+
+    except Exception as e:
+        return False, f"Error saving approved data: {e}"
+
+
 @st.cache_data
 def process_vacuum_data(df):
     """
