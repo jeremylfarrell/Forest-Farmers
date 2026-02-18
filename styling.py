@@ -335,6 +335,27 @@ def apply_custom_css():
         }
     }
 
+    /* Make dataframe scrollbars bigger and always visible */
+    [data-testid="stDataFrame"] ::-webkit-scrollbar {
+        width: 14px !important;
+        height: 14px !important;
+    }
+
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-track {
+        background: #f0f0f0 !important;
+        border-radius: 7px !important;
+    }
+
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb {
+        background-color: #8B4513 !important;
+        border-radius: 7px !important;
+        border: 2px solid #f0f0f0 !important;
+    }
+
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover {
+        background-color: #654321 !important;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 

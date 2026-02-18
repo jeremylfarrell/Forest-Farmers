@@ -2,6 +2,13 @@
 Tap History Page Module
 Historical tap count analysis by conductor system and mainline.
 Loads static Excel data (VT 2021-2025) and compares against live 2026 tapping data.
+
+Status Color Codes (manager-defined):
+    Black  = Not started (0 taps in 2026, had taps in 2025)
+    Red    = Significantly less (< 95% of 2025)
+    Yellow = On track (within 5%: 95-99% or 101-105%)
+    Green  = On target (within 1%: 99-101%)
+    Purple = Significantly more (> 105% of 2025)
 """
 
 import streamlit as st
@@ -16,6 +23,48 @@ from utils import find_column, extract_conductor_system
 # Year columns in the historical data
 YEAR_COLS = [2021, 2022, 2023, 2024, 2025]
 
+
+# ── Status helpers ─────────────────────────────────────────────────────
+
+def _classify_status(t2025, t2026):
+    """
+    Classify a mainline's 2026 vs 2025 status using the manager's 5-tier system.
+    Returns (label, css_style) tuple.
+    """
+    if t2025 > 0 and t2026 == 0:
+        return "Not started"
+    if t2025 == 0 and t2026 > 0:
+        return "New tapping"
+    if t2025 == 0 and t2026 == 0:
+        return ""
+    # Both > 0
+    pct = t2026 / t2025 * 100
+    if pct < 95:
+        return "Significantly less"
+    elif pct < 99:
+        return "On track"
+    elif pct <= 101:
+        return "On target"
+    elif pct <= 105:
+        return "On track"
+    else:
+        return "Significantly more"
+
+
+def _color_status(val):
+    """Return CSS styling for a status cell (used with pandas Styler.map)."""
+    color_map = {
+        'Not started': 'background-color: #1a1a1a; color: white',
+        'Significantly less': 'background-color: #dc3545; color: white',
+        'On track': 'background-color: #ffc107; color: black',
+        'On target': 'background-color: #28a745; color: white',
+        'Significantly more': 'background-color: #9b59b6; color: white',
+        'New tapping': 'background-color: #17a2b8; color: white',
+    }
+    return color_map.get(val, '')
+
+
+# ── Data loaders ───────────────────────────────────────────────────────
 
 @st.cache_data
 def load_historical_taps():
@@ -62,6 +111,39 @@ def get_2026_taps(personnel_df):
     return taps_by_ml
 
 
+def get_2026_tappers(personnel_df):
+    """
+    Extract unique employee names per mainline from live personnel data.
+    Returns a Series indexed by mainline name with comma-separated employee names.
+    """
+    if personnel_df is None or personnel_df.empty:
+        return pd.Series(dtype=str)
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    taps_col = find_column(personnel_df, 'Taps Put In', 'taps_in', 'taps put in')
+    emp_col = find_column(personnel_df, 'Employee Name', 'Employee', 'EE First', 'Name')
+
+    if not mainline_col or not taps_col or not emp_col:
+        return pd.Series(dtype=str)
+
+    df = personnel_df.copy()
+    df['_taps'] = pd.to_numeric(df[taps_col], errors='coerce').fillna(0)
+    df['_ml'] = df[mainline_col].astype(str).str.strip()
+    df['_emp'] = df[emp_col].astype(str).str.strip()
+
+    # Filter to rows with actual taps > 0
+    df = df[df['_ml'].str.len() > 0]
+    df = df[df['_ml'] != 'nan']
+    df = df[df['_taps'] > 0]
+
+    tappers_by_ml = df.groupby('_ml')['_emp'].apply(
+        lambda names: ', '.join(sorted(names.unique()))
+    )
+    return tappers_by_ml
+
+
+# ── Main render ────────────────────────────────────────────────────────
+
 def render(personnel_df=None, vacuum_df=None):
     """Render tap history analysis page."""
 
@@ -77,6 +159,7 @@ def render(personnel_df=None, vacuum_df=None):
 
     # Get live 2026 data from personnel sheet
     taps_2026 = get_2026_taps(personnel_df)
+    tappers_2026 = get_2026_tappers(personnel_df)
     has_2026 = len(taps_2026) > 0
 
     # Merge 2026 taps into historical dataframe
@@ -248,26 +331,12 @@ def render(personnel_df=None, vacuum_df=None):
         else:
             ml_display['Change (24-25)'] = (ml_display[2025].fillna(0) - ml_display[2024].fillna(0)).astype(int)
 
-        # Flag variances
+        # Assign status using the new 5-tier system
         def _flag_mainline(row):
             t2025 = row[2025] if pd.notna(row[2025]) else 0
             if has_2026:
                 t2026 = row.get('2026', 0) if pd.notna(row.get('2026', 0)) else 0
-                if t2025 > 0 and t2026 == 0:
-                    return "⚠️ Not started"
-                if t2025 > 0 and t2026 > 0:
-                    pct = t2026 / t2025 * 100
-                    if pct < 50:
-                        return "🔴 Behind"
-                    elif pct < 90:
-                        return "🟡 In progress"
-                    elif pct < 110:
-                        return "🟢 On track"
-                    else:
-                        return "🔵 Over 2025"
-                if t2025 == 0 and t2026 > 0:
-                    return "🆕 New tapping"
-                return ""
+                return _classify_status(t2025, t2026)
             else:
                 t2024 = row[2024] if pd.notna(row[2024]) else 0
                 has_prior = any(pd.notna(row[yr]) and row[yr] > 0 for yr in [2021, 2022, 2023])
@@ -283,6 +352,10 @@ def render(personnel_df=None, vacuum_df=None):
 
         ml_display['Status'] = cs_data.apply(_flag_mainline, axis=1)
 
+        # Add tappers column
+        if has_2026:
+            ml_display['Tappers (2026)'] = cs_data['mainline'].map(tappers_2026).fillna('')
+
         for yr in YEAR_COLS:
             ml_display[yr] = ml_display[yr].fillna(0).astype(int)
         if has_2026:
@@ -292,16 +365,35 @@ def render(personnel_df=None, vacuum_df=None):
         ml_display = ml_display.rename(columns={'mainline': 'Mainline'})
         ml_display = ml_display.sort_values('Mainline')
 
-        st.dataframe(ml_display, use_container_width=True, hide_index=True, height=400)
+        # Reorder columns for clarity
+        if has_2026:
+            col_order = ['Mainline'] + [yr for yr in YEAR_COLS] + [
+                'Diff (26 vs 25)', '2026', '% of 2025', 'Tappers (2026)', 'Status'
+            ]
+            ml_display = ml_display[[c for c in col_order if c in ml_display.columns]]
+
+        # Apply color-coded styling to Status column
+        if has_2026 and 'Status' in ml_display.columns:
+            styled_ml = ml_display.style.map(_color_status, subset=['Status'])
+            st.dataframe(styled_ml, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.dataframe(ml_display, use_container_width=True, hide_index=True, height=400)
 
     st.divider()
 
     # ==================================================================
-    # SECTION 3: Variance Flags / Attention List
+    # SECTION 3: Mainlines Needing Attention
     # ==================================================================
     if has_2026:
         st.subheader("⚠️ Mainlines Needing Attention")
-        st.markdown("*Mainlines that had taps in 2025 but have 0 or very few in 2026 so far*")
+        st.markdown(
+            "*Mainlines that had taps in 2025 but have 0 or very few in 2026 so far — "
+            "excludes conductor systems with zero 2026 taps (not yet started)*"
+        )
+
+        # Compute total 2026 taps per conductor system to identify active systems
+        cs_2026_totals = hist_df.groupby('Conductor System')['2026'].sum()
+        active_conductor_systems = set(cs_2026_totals[cs_2026_totals > 0].index)
 
         attention = []
         for _, row in hist_df.iterrows():
@@ -310,46 +402,69 @@ def render(personnel_df=None, vacuum_df=None):
             t2025 = row[2025] if pd.notna(row[2025]) else 0
             t2026 = row.get('2026', 0) if pd.notna(row.get('2026', 0)) else 0
 
+            # Skip mainlines with no 2025 baseline
             if t2025 <= 0:
                 continue
 
+            # Skip mainlines from conductor systems with zero total 2026 taps
+            # (entire system hasn't started tapping yet — not useful to list)
+            if cs not in active_conductor_systems:
+                continue
+
             pct = (t2026 / t2025 * 100) if t2025 > 0 else 0
+            status = _classify_status(t2025, t2026)
 
-            flag = None
-            if t2026 == 0:
-                flag = "Not started"
-            elif pct < 50:
-                flag = "Significantly behind"
-
-            if flag:
-                attention.append({
-                    'Mainline': mainline,
-                    'Conductor System': cs,
-                    '2025 Taps': int(t2025),
-                    '2026 Taps': int(t2026),
-                    '% of 2025': f"{pct:.0f}%",
-                    'Remaining': int(max(t2025 - t2026, 0)),
-                    'Status': flag,
-                })
+            attention.append({
+                'Mainline': mainline,
+                'Conductor System': cs,
+                '2025 Taps': int(t2025),
+                '2026 Taps': int(t2026),
+                '% of 2025': f"{pct:.0f}%",
+                'Remaining': int(max(t2025 - t2026, 0)),
+                'Status': status,
+            })
 
         if attention:
             att_df = pd.DataFrame(attention)
-            att_df = att_df.sort_values(['Status', 'Remaining'], ascending=[True, False])
 
-            col1, col2, col3 = st.columns(3)
+            # Sort by status priority (worst first), then by Remaining descending
+            status_order = {
+                'Not started': 0,
+                'Significantly less': 1,
+                'On track': 2,
+                'On target': 3,
+                'Significantly more': 4,
+            }
+            att_df['_sort'] = att_df['Status'].map(status_order).fillna(5)
+            att_df = att_df.sort_values(['_sort', 'Remaining'], ascending=[True, False]).drop(columns='_sort')
+
+            # Summary metrics by status
+            col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 not_started = len(att_df[att_df['Status'] == 'Not started'])
                 st.metric("Not Started", not_started)
             with col2:
-                behind = len(att_df[att_df['Status'] == 'Significantly behind'])
-                st.metric("Significantly Behind", behind)
+                sig_less = len(att_df[att_df['Status'] == 'Significantly less'])
+                st.metric("Sig. Less", sig_less)
             with col3:
-                total_remaining = att_df['Remaining'].sum()
-                st.metric("Total Taps Remaining", f"{total_remaining:,}")
+                on_track = len(att_df[att_df['Status'] == 'On track'])
+                st.metric("On Track", on_track)
+            with col4:
+                on_target = len(att_df[att_df['Status'] == 'On target'])
+                st.metric("On Target", on_target)
+            with col5:
+                sig_more = len(att_df[att_df['Status'] == 'Significantly more'])
+                st.metric("Sig. More", sig_more)
 
-            st.dataframe(att_df, use_container_width=True, hide_index=True, height=500)
+            # Also show total taps remaining
+            total_remaining = att_df['Remaining'].sum()
+            st.caption(f"**Total Taps Remaining:** {total_remaining:,}")
+
+            # Apply color-coded styling to Status column
+            styled_att = att_df.style.map(_color_status, subset=['Status'])
+            st.dataframe(styled_att, use_container_width=True, hide_index=True, height=500)
         else:
-            st.success("All mainlines with 2025 data are at 50%+ in 2026!")
+            st.success("All mainlines with 2025 data are progressing in 2026!")
     else:
         st.subheader(f"⚠️ Variance Flags (>{variance_pct}% change)")
         st.markdown(f"*Mainlines where 2025 taps differ from 2024 by more than {variance_pct}%*")
@@ -411,22 +526,47 @@ def render(personnel_df=None, vacuum_df=None):
     st.divider()
 
     # ==================================================================
-    # SECTION 4: Full Historical View
+    # SECTION 4: Full Historical View (now includes 2026 + % of 2026)
     # ==================================================================
-    with st.expander("📊 Full Historical Data (2021-2025)"):
-        full_cs = hist_df.groupby('Conductor System')[YEAR_COLS].sum().reset_index()
-        full_cs['Change (24-25)'] = full_cs[2025] - full_cs[2024]
-        full_cs = full_cs.sort_values(2025, ascending=False)
-        for yr in YEAR_COLS:
-            full_cs[yr] = full_cs[yr].fillna(0).astype(int)
-        full_cs['Change (24-25)'] = full_cs['Change (24-25)'].fillna(0).astype(int)
-        st.dataframe(full_cs, use_container_width=True, hide_index=True)
+    if has_2026:
+        with st.expander("📊 Full Historical Data (2021-2026)"):
+            agg_cols = YEAR_COLS + ['2026']
+            full_cs = hist_df.groupby('Conductor System')[agg_cols].sum().reset_index()
+            full_cs['Change (25-26)'] = full_cs['2026'] - full_cs[2025]
+            full_cs = full_cs.sort_values('Conductor System')
+
+            for yr in YEAR_COLS:
+                full_cs[yr] = full_cs[yr].fillna(0).astype(int)
+            full_cs['2026'] = full_cs['2026'].fillna(0).astype(int)
+            full_cs['Change (25-26)'] = full_cs['Change (25-26)'].fillna(0).astype(int)
+
+            # Build display with "% of 2026" interleaved after each historical year
+            display_data = full_cs[['Conductor System']].copy()
+            for yr in YEAR_COLS:
+                display_data[str(yr)] = full_cs[yr]
+                pct_col = f'% 2026'
+                pct_vals = ((full_cs[yr] / full_cs['2026']) * 100).round(0)
+                pct_vals = pct_vals.replace([float('inf'), float('-inf')], 0).fillna(0)
+                display_data[f'{yr} % of 2026'] = pct_vals.astype(int).astype(str) + '%'
+            display_data['2026'] = full_cs['2026']
+            display_data['Change (25-26)'] = full_cs['Change (25-26)']
+
+            st.dataframe(display_data, use_container_width=True, hide_index=True)
+    else:
+        with st.expander("📊 Full Historical Data (2021-2025)"):
+            full_cs = hist_df.groupby('Conductor System')[YEAR_COLS].sum().reset_index()
+            full_cs['Change (24-25)'] = full_cs[2025] - full_cs[2024]
+            full_cs = full_cs.sort_values(2025, ascending=False)
+            for yr in YEAR_COLS:
+                full_cs[yr] = full_cs[yr].fillna(0).astype(int)
+            full_cs['Change (24-25)'] = full_cs['Change (24-25)'].fillna(0).astype(int)
+            st.dataframe(full_cs, use_container_width=True, hide_index=True)
 
     # ==================================================================
     # SECTION 5: Notes
     # ==================================================================
     with st.expander("💡 Understanding This Data"):
-        st.markdown(f"""
+        st.markdown("""
         **Data Sources:**
         - **2021-2025:** VT historical tap counts from Excel file (committed to repo)
         - **2026:** Live tapping data from personnel Google Sheet (same data as Tapping Operations page)
@@ -436,13 +576,21 @@ def render(personnel_df=None, vacuum_df=None):
         **2026 vs 2025 Comparison:**
         - Shows how the current season's tapping compares to last year's final counts
         - **% of 2025** = (2026 taps / 2025 taps) × 100
-        - Red/yellow/green coloring shows which systems need the most attention
-        - "Not started" = mainline had taps in 2025 but none recorded in 2026 yet
-        - "Significantly behind" = less than 50% of 2025's total
+
+        **Status Color Codes:**
+        - **Black — Not started:** Mainline had taps in 2025 but none in 2026 yet
+        - **Red — Significantly less:** Less than 95% of 2025 taps
+        - **Yellow — On track:** Within 5% of 2025 taps (95–99% or 101–105%)
+        - **Green — On target:** Within 1% of 2025 taps (99–101%)
+        - **Purple — Significantly more:** More than 105% of 2025 taps
+
+        **Attention List Filtering:**
+        - Conductor systems with zero total 2026 taps are excluded (haven't started tapping yet)
+        - Individual mainlines within partially-tapped systems that have zero 2026 taps are shown as "Not started"
+        - Example: If DHE has taps in 2026 overall, but DHE08 specifically has zero, DHE08 will appear as "Not started"
 
         **Data Notes:**
         - If a mainline never had data before 2024/2025, it's a **new line** that was installed
         - If a mainline had taps in 2021-2023 but shows 0 in 2024/2025, it's likely **employee error** (forgot to enter tap count)
-        - Variance threshold is **{variance_pct}%** (configurable in config.py)
         - Mainline names must match between the historical Excel and the live personnel sheet for 2026 comparison to work
         """)
