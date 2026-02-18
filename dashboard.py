@@ -485,7 +485,7 @@ def main():
     elif page == "⚠️ Alerts":
         data_quality.render(personnel_df, vacuum_df)
     elif page == "🌍 Interactive Map":
-        sensor_map.render(vacuum_df, personnel_df)
+        sensor_map.render(vacuum_df, personnel_df, repairs_df)
     elif page == "🌡️ Sap Flow Forecast":
         sap_forecast.render(vacuum_df, personnel_df)
     elif page == "📊 Raw Data":

@@ -133,7 +133,7 @@ def get_taps_details_by_mainline(personnel_df):
     return taps_details
 
 
-def render(vacuum_df, personnel_df):
+def render(vacuum_df, personnel_df, repairs_df=None):
     """Render interactive map with site-aware visualization"""
 
     st.title("🌍 Interactive Sensor Map")
@@ -570,8 +570,8 @@ def render(vacuum_df, personnel_df):
     st.subheader("🔧 Repairs Needing Attention")
     st.markdown("*Lines with reported repairs that have no subsequent fix logged*")
 
-    # Build repairs map from personnel data
-    _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon)
+    # Build repairs map from repairs tracker (or fall back to personnel data)
+    _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon, repairs_df)
 
     st.divider()
 
@@ -720,15 +720,292 @@ def render(vacuum_df, personnel_df):
         """)
 
 
-def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon):
+def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon, repairs_df=None):
     """
-    Render a second map showing mainlines with unresolved repairs.
+    Render a second map showing mainlines with repair status.
+
+    If repairs_df is provided (from the repairs_tracker Google Sheet), uses that
+    for rich status/detail overlays. Otherwise falls back to scanning personnel
+    data for repair text descriptions.
+
+    Color coding (tracker mode):
+        Red    = Open repairs
+        Orange = Deferred repairs
+        Green  = Completed repairs
+        Gray   = No repairs reported
+    """
+    if map_data.empty:
+        st.info("No sensor data available for repairs map")
+        return
+
+    # ── Use repairs_tracker data if available ──────────────────────────
+    if repairs_df is not None and not repairs_df.empty:
+        _render_repairs_map_from_tracker(repairs_df, map_data, map_style, tiles, attr, center_lat, center_lon)
+        return
+
+    # ── Fallback: derive repair info from personnel data ──────────────
+    _render_repairs_map_from_personnel(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon)
+
+
+def _render_repairs_map_from_tracker(repairs_df, map_data, map_style, tiles, attr, center_lat, center_lon):
+    """Render repairs overlay using the repairs_tracker sheet data."""
+
+    df = repairs_df.copy()
+
+    # Normalise status
+    if 'Status' in df.columns:
+        df['Status'] = df['Status'].astype(str).str.strip().str.title()
+    else:
+        df['Status'] = 'Open'
+
+    # Parse dates
+    if 'Date Found' in df.columns:
+        df['Date Found'] = pd.to_datetime(df['Date Found'], errors='coerce')
+        df['Age (Days)'] = (pd.Timestamp.now() - df['Date Found']).dt.days
+    else:
+        df['Age (Days)'] = None
+
+    if 'Date Resolved' in df.columns:
+        df['Date Resolved'] = pd.to_datetime(df['Date Resolved'], errors='coerce')
+
+    # ── Metrics ────────────────────────────────────────────────────────
+    open_count = (df['Status'] == 'Open').sum()
+    deferred_count = (df['Status'] == 'Deferred').sum()
+    completed_count = (df['Status'] == 'Completed').sum()
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Open", int(open_count))
+    with col2:
+        st.metric("Deferred", int(deferred_count))
+    with col3:
+        st.metric("Completed", int(completed_count))
+    with col4:
+        st.metric("Total Repairs", len(df))
+
+    # ── Controls ───────────────────────────────────────────────────────
+    show_completed = st.checkbox(
+        "Show completed repairs on map",
+        value=False,
+        help="Toggle to show/hide completed (green) markers"
+    )
+
+    # Filter repairs for display
+    if show_completed:
+        display_df = df
+    else:
+        display_df = df[df['Status'] != 'Completed']
+
+    if display_df.empty and not show_completed:
+        st.success("No open or deferred repairs to display! Toggle 'Show completed' to see resolved items.")
+        return
+
+    # ── Match repairs to sensors ───────────────────────────────────────
+    sensor_names = map_data['Sensor'].tolist()
+
+    # Group repairs by the sensor they map to
+    sensor_repairs = {}  # sensor_name -> list of repair dicts
+    unmatched_repairs = []
+
+    for _, repair in display_df.iterrows():
+        mainline = repair.get('Mainline', '')
+        if pd.isna(mainline) or not str(mainline).strip():
+            unmatched_repairs.append(repair)
+            continue
+
+        matched_sensor = match_mainline_to_sensor(str(mainline).strip(), sensor_names)
+        if matched_sensor:
+            if matched_sensor not in sensor_repairs:
+                sensor_repairs[matched_sensor] = []
+            sensor_repairs[matched_sensor].append(repair)
+        else:
+            unmatched_repairs.append(repair)
+
+    # ── Build map ──────────────────────────────────────────────────────
+    m2 = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=13,
+        tiles=tiles,
+        attr=attr
+    )
+
+    # Legend
+    legend_html = '''
+    <div style="position: fixed;
+                top: 10px; right: 10px; width: 180px; height: auto;
+                background-color: white; border:2px solid grey; z-index:9999;
+                font-size:14px; padding: 10px; border-radius: 5px;">
+    <p style="margin: 0; font-weight: bold; text-align: center;">Repair Status</p>
+    <p style="margin: 5px 0;"><span style="color: #e74c3c; font-size: 20px;">&#9679;</span> Open</p>
+    <p style="margin: 5px 0;"><span style="color: #f39c12; font-size: 20px;">&#9679;</span> Deferred</p>
+    <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> Completed</p>
+    <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Repairs</p>
+    </div>
+    '''
+    m2.get_root().html.add_child(folium.Element(legend_html))
+
+    # ── Place markers ──────────────────────────────────────────────────
+    for _, row in map_data.iterrows():
+        sensor = row['Sensor']
+        repairs_list = sensor_repairs.get(sensor, [])
+
+        if not repairs_list:
+            # Gray — no repairs for this sensor
+            color = '#bdc3c7'
+            dot_radius = 6
+            popup_html = f"""
+            <div style="font-family: Arial;">
+                <h4 style="margin: 0 0 5px 0;">{sensor}</h4>
+                <p>No repairs reported</p>
+            </div>
+            """
+        else:
+            # Determine dominant status for marker color
+            statuses = [str(r.get('Status', 'Open')).title() for r in repairs_list]
+            open_here = statuses.count('Open')
+            deferred_here = statuses.count('Deferred')
+            completed_here = statuses.count('Completed')
+
+            if open_here > 0:
+                color = '#e74c3c'     # red — has open repairs
+            elif deferred_here > 0:
+                color = '#f39c12'     # orange — deferred only
+            else:
+                color = '#27ae60'     # green — all completed
+
+            # Dot size: 8 base + 3 per open/deferred repair (cap at 20)
+            active_count = open_here + deferred_here
+            dot_radius = min(8 + active_count * 3, 20)
+
+            # Build popup with repair list
+            popup_html = f"""
+            <div style="font-family: Arial; min-width: 280px; max-width: 400px;">
+                <h4 style="margin: 0 0 8px 0;">{sensor}</h4>
+                <p style="margin: 0 0 8px 0; font-size: 12px; color: #666;">
+                    {open_here} open &middot; {deferred_here} deferred &middot; {completed_here} completed
+                </p>
+            """
+
+            for repair in repairs_list:
+                status = str(repair.get('Status', 'Open')).title()
+
+                # Status badge color
+                if status == 'Open':
+                    badge_color = '#e74c3c'
+                elif status == 'Deferred':
+                    badge_color = '#f39c12'
+                else:
+                    badge_color = '#27ae60'
+
+                # Date found
+                date_found_str = ''
+                if pd.notna(repair.get('Date Found')):
+                    try:
+                        date_found_str = repair['Date Found'].strftime('%m/%d/%y')
+                    except Exception:
+                        date_found_str = str(repair['Date Found'])[:10]
+
+                # Age
+                age_str = ''
+                age_val = repair.get('Age (Days)')
+                if pd.notna(age_val):
+                    age_str = f" ({int(age_val)}d)"
+
+                # Description
+                desc = str(repair.get('Description', ''))[:120]
+
+                # Found by
+                found_by = str(repair.get('Found By', '')) if pd.notna(repair.get('Found By')) else ''
+
+                popup_html += f"""
+                <div style="border-top: 1px solid #eee; padding: 6px 0;">
+                    <span style="background: {badge_color}; color: white; padding: 1px 6px;
+                                 border-radius: 3px; font-size: 11px;">{status}</span>
+                    <span style="font-size: 11px; color: #888; margin-left: 4px;">
+                        {date_found_str}{age_str}
+                    </span>
+                """
+
+                if desc:
+                    popup_html += f"<p style='margin: 4px 0 2px 0; font-size: 12px;'>{desc}</p>"
+                if found_by:
+                    popup_html += f"<p style='margin: 2px 0; font-size: 11px; color: #666;'>Found by: {found_by}</p>"
+
+                # Resolution info for completed
+                if status == 'Completed':
+                    resolved_by = str(repair.get('Resolved By', '')) if pd.notna(repair.get('Resolved By')) else ''
+                    date_resolved_str = ''
+                    if pd.notna(repair.get('Date Resolved')):
+                        try:
+                            date_resolved_str = repair['Date Resolved'].strftime('%m/%d/%y')
+                        except Exception:
+                            date_resolved_str = str(repair['Date Resolved'])[:10]
+                    cost_str = ''
+                    if pd.notna(repair.get('Repair Cost')) and str(repair.get('Repair Cost', '')).strip():
+                        try:
+                            cost_str = f"${float(repair['Repair Cost']):.2f}"
+                        except (ValueError, TypeError):
+                            cost_str = str(repair['Repair Cost'])
+                    resolution_parts = []
+                    if resolved_by:
+                        resolution_parts.append(f"by {resolved_by}")
+                    if date_resolved_str:
+                        resolution_parts.append(f"on {date_resolved_str}")
+                    if cost_str:
+                        resolution_parts.append(f"cost {cost_str}")
+                    if resolution_parts:
+                        popup_html += f"<p style='margin: 2px 0; font-size: 11px; color: #27ae60;'>Resolved {' '.join(resolution_parts)}</p>"
+
+                popup_html += "</div>"
+
+            popup_html += "</div>"
+
+        # Tooltip
+        tooltip_text = sensor
+        if repairs_list:
+            active = sum(1 for r in repairs_list if str(r.get('Status', '')).title() in ('Open', 'Deferred'))
+            if active:
+                tooltip_text += f" ({active} open)"
+
+        folium.CircleMarker(
+            location=[row['Latitude'], row['Longitude']],
+            radius=dot_radius,
+            popup=folium.Popup(popup_html, max_width=400),
+            tooltip=tooltip_text,
+            color=color,
+            fill=True,
+            fillColor=color,
+            fillOpacity=0.8,
+            weight=2
+        ).add_to(m2)
+
+    st_folium(m2, width=None, height=600, returned_objects=[])
+
+    # Show unmatched repairs
+    if unmatched_repairs:
+        with st.expander(f"⚠️ {len(unmatched_repairs)} repairs could not be placed on map", expanded=False):
+            st.markdown("These repairs have mainline names that don't match any sensor with GPS coordinates.")
+            unmatched_data = []
+            for repair in unmatched_repairs:
+                unmatched_data.append({
+                    'Mainline': repair.get('Mainline', ''),
+                    'Status': repair.get('Status', ''),
+                    'Date Found': repair.get('Date Found', ''),
+                    'Description': str(repair.get('Description', ''))[:80],
+                })
+            st.dataframe(pd.DataFrame(unmatched_data), use_container_width=True, hide_index=True)
+
+
+def _render_repairs_map_from_personnel(personnel_df, map_data, map_style, tiles, attr, center_lat, center_lon):
+    """
+    Fallback: Render repairs map by scanning personnel data for repair text.
+    Used when no repairs_tracker sheet is available.
     Red = repairs reported but no subsequent fix job logged.
     Green = repairs reported AND a fix was logged after.
     Gray = no repairs reported.
     """
-    if personnel_df.empty or map_data.empty:
-        st.info("No data available for repairs map")
+    if personnel_df.empty:
+        st.info("No personnel data available for repairs map")
         return
 
     # Find columns
@@ -778,8 +1055,6 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
         st.info("No repair descriptions found in personnel data")
         return
 
-    # For each mainline with repairs, check if there's a subsequent "fixing identified tubing"
-    # or similar fix job code entry
     def is_fix_job(job_text):
         if pd.isna(job_text):
             return False
@@ -799,8 +1074,7 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
     }).reset_index()
     mainline_repairs.columns = ['Mainline', 'Last_Repair_Date', 'Last_Repair_Desc']
 
-    # Check for fix jobs after each repair
-    repair_status = {}  # mainline -> {'status': 'unresolved'|'resolved', 'repair_date', 'description'}
+    repair_status = {}
 
     for _, row in mainline_repairs.iterrows():
         mainline = row['Mainline']
@@ -810,7 +1084,6 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
         if pd.isna(mainline) or not str(mainline).strip():
             continue
 
-        # Look for fix jobs on this mainline after the repair date
         if job_col:
             fix_entries = df[
                 (df[mainline_col] == mainline) &
@@ -831,7 +1104,6 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
         st.info("No repairs to map")
         return
 
-    # Count stats
     unresolved = sum(1 for v in repair_status.values() if v['status'] == 'unresolved')
     resolved = sum(1 for v in repair_status.values() if v['status'] == 'resolved')
 
@@ -843,7 +1115,6 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
     with col3:
         st.metric("Total Lines with Repairs", len(repair_status))
 
-    # Build the repairs map
     m2 = folium.Map(
         location=[center_lat, center_lon],
         zoom_start=13,
@@ -851,7 +1122,6 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
         attr=attr
     )
 
-    # Legend
     legend_html = '''
     <div style="position: fixed;
                 top: 10px; right: 10px; width: 180px; height: auto;
@@ -865,12 +1135,9 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
     '''
     m2.get_root().html.add_child(folium.Element(legend_html))
 
-    sensor_names = map_data['Sensor'].tolist()
-
     for _, row in map_data.iterrows():
         sensor = row['Sensor']
 
-        # Try to match sensor to a mainline with repair info
         matched_mainline = None
         for mainline in repair_status:
             matched = match_mainline_to_sensor(mainline, [sensor])
@@ -881,17 +1148,17 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
         if matched_mainline and matched_mainline in repair_status:
             info = repair_status[matched_mainline]
             if info['status'] == 'unresolved':
-                color = '#e74c3c'  # red
+                color = '#e74c3c'
                 status_text = 'Needs Fix'
             else:
-                color = '#27ae60'  # green
+                color = '#27ae60'
                 status_text = 'Fix Logged'
 
             date_str = ''
             if pd.notna(info['repair_date']):
                 try:
                     date_str = info['repair_date'].strftime('%Y-%m-%d')
-                except:
+                except Exception:
                     date_str = str(info['repair_date'])[:10]
 
             popup_html = f"""
@@ -903,7 +1170,7 @@ def _render_repairs_map(personnel_df, map_data, map_style, tiles, attr, center_l
             </div>
             """
         else:
-            color = '#bdc3c7'  # gray - no repairs
+            color = '#bdc3c7'
             popup_html = f"""
             <div style="font-family: Arial;">
                 <h4 style="margin: 0 0 5px 0;">{sensor}</h4>
