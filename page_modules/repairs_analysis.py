@@ -52,6 +52,13 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     if 'Repair Cost' not in df.columns:
         df['Repair Cost'] = ''
 
+    # --- Auto-complete repairs from TSheets ---
+    # If someone clocked into a mainline with a "Fixing Identified Tubing Issues"
+    # job code AFTER the repair was found, auto-mark it as Completed.
+    auto_completed = _auto_complete_repairs(df, personnel_df)
+    if auto_completed > 0:
+        st.info(f"Auto-completed **{auto_completed}** repair(s) based on TSheets 'Fixing Identified Tubing Issues' entries.")
+
     # --- Summary Metrics ---
     st.subheader("Summary")
 
@@ -406,6 +413,71 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
           to manually enter the approx cost
         - The dashboard refreshes data every hour or on manual refresh
         """)
+
+
+def _auto_complete_repairs(repairs_df, personnel_df):
+    """
+    Auto-complete open repairs when someone clocked into the same mainline
+    with a 'Fixing Identified Tubing Issues' job code after the repair was found.
+
+    Modifies repairs_df in-place. Returns count of auto-completed repairs.
+    """
+    from utils import find_column
+
+    if personnel_df is None or personnel_df.empty:
+        return 0
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+
+    if not all([mainline_col, job_col, date_col]):
+        return 0
+
+    # Get fixing job entries from personnel data
+    fixing_keywords = ['fixing identified tubing', 'already identified tubing issue']
+    p = personnel_df.copy()
+    p['_job'] = p[job_col].astype(str).str.lower()
+    p['_is_fixing'] = p['_job'].apply(lambda j: any(kw in j for kw in fixing_keywords))
+    fixing_entries = p[p['_is_fixing']].copy()
+
+    if fixing_entries.empty:
+        return 0
+
+    fixing_entries['_mainline'] = fixing_entries[mainline_col].astype(str).str.strip().str.upper()
+    fixing_entries['_date'] = pd.to_datetime(fixing_entries[date_col], errors='coerce')
+    fixing_entries['_emp'] = fixing_entries[emp_col] if emp_col else 'Unknown'
+
+    auto_count = 0
+
+    for idx, repair in repairs_df.iterrows():
+        if repair.get('Status') != 'Open':
+            continue
+
+        mainline = str(repair.get('Mainline', '')).strip().upper()
+        date_found = repair.get('Date Found')
+
+        if pd.isna(date_found) or not mainline:
+            continue
+
+        # Find fixing entries on this mainline AFTER the repair was found
+        matches = fixing_entries[
+            (fixing_entries['_mainline'] == mainline) &
+            (fixing_entries['_date'] >= date_found)
+        ]
+
+        if not matches.empty:
+            # Use the first (earliest) fixing entry
+            first_fix = matches.sort_values('_date').iloc[0]
+            repairs_df.at[idx, 'Status'] = 'Completed'
+            repairs_df.at[idx, 'Date Resolved'] = first_fix['_date']
+            repairs_df.at[idx, 'Resolved By'] = str(first_fix.get('_emp', 'Auto'))
+            if pd.isna(repairs_df.at[idx, 'Notes']) or str(repairs_df.at[idx, 'Notes']).strip() == '':
+                repairs_df.at[idx, 'Notes'] = 'Auto-completed from TSheets'
+            auto_count += 1
+
+    return auto_count
 
 
 def _save_edits(edited_df):
