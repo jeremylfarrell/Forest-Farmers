@@ -312,17 +312,37 @@ def render_sidebar():
 
         st.divider()
 
+        # Vacuum data range control
+        if 'vacuum_days' not in st.session_state:
+            st.session_state.vacuum_days = 3  # Fast default: last 3 days
+
+        current_days = st.session_state.vacuum_days
+
+        if current_days <= 3:
+            if st.button("📅 Load More Vacuum Data (60 days)", use_container_width=True):
+                st.session_state.vacuum_days = 60
+                st.cache_data.clear()
+                st.rerun()
+            st.caption("📊 Showing last 3 days of vacuum data")
+        else:
+            if st.button("⚡ Quick Load (3 days)", use_container_width=True):
+                st.session_state.vacuum_days = 3
+                st.cache_data.clear()
+                st.rerun()
+            st.caption("📊 Showing last 60 days of vacuum data")
+
+        st.divider()
+
         # Footer info
-        st.caption(f"v9.0 Manager Data Review | {datetime.now().strftime('%H:%M:%S')}")
-        st.caption("📊 Loading last 60 days")
+        st.caption(f"v9.1 Fast Load | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
     site_filter = st.session_state.get("selected_site", "All Sites")
-    
-    # Fixed settings (no user controls)
-    days_to_load = 60  # Always load 60 days
-    
+
+    # Vacuum days from session state (default 3 for fast loading)
+    days_to_load = st.session_state.get('vacuum_days', 3)
+
     return page, days_to_load, site_filter
 
 
@@ -463,17 +483,17 @@ def main():
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"🟦 **New York View** - {sensor_count} sensors | Last 60 days")
+            st.success(f"🟦 **New York View** - {sensor_count} sensors | Last {days_to_load} days")
     elif site_filter == "VT":
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"🟩 **Vermont View** - {sensor_count} sensors | Last 60 days")
+            st.success(f"🟩 **Vermont View** - {sensor_count} sensors | Last {days_to_load} days")
     else:
         sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
         if not vacuum_df.empty and sensor_col:
             sensor_count = vacuum_df[sensor_col].nunique()
-            st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last 60 days")
+            st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last {days_to_load} days")
 
     # Route to selected page
     if page == "🔧 Vacuum Performance":

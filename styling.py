@@ -335,25 +335,71 @@ def apply_custom_css():
         }
     }
 
-    /* Make dataframe scrollbars bigger and always visible */
-    [data-testid="stDataFrame"] ::-webkit-scrollbar {
+    /* ========================================
+       SCROLLBAR STYLING - always visible, bigger
+       Applies to all scrollable containers
+       ======================================== */
+
+    /* Global scrollbar for all Streamlit elements */
+    [data-testid="stDataFrame"] ::-webkit-scrollbar,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar,
+    [data-testid="stExpander"] ::-webkit-scrollbar,
+    .stDataFrame ::-webkit-scrollbar,
+    .element-container ::-webkit-scrollbar,
+    [data-testid="stVerticalBlock"] ::-webkit-scrollbar,
+    iframe ::-webkit-scrollbar {
         width: 14px !important;
         height: 14px !important;
     }
 
-    [data-testid="stDataFrame"] ::-webkit-scrollbar-track {
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-track,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-track,
+    [data-testid="stExpander"] ::-webkit-scrollbar-track,
+    .stDataFrame ::-webkit-scrollbar-track,
+    .element-container ::-webkit-scrollbar-track,
+    [data-testid="stVerticalBlock"] ::-webkit-scrollbar-track,
+    iframe ::-webkit-scrollbar-track {
         background: #f0f0f0 !important;
         border-radius: 7px !important;
     }
 
-    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb {
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb,
+    [data-testid="stExpander"] ::-webkit-scrollbar-thumb,
+    .stDataFrame ::-webkit-scrollbar-thumb,
+    .element-container ::-webkit-scrollbar-thumb,
+    [data-testid="stVerticalBlock"] ::-webkit-scrollbar-thumb,
+    iframe ::-webkit-scrollbar-thumb {
         background-color: #8B4513 !important;
         border-radius: 7px !important;
         border: 2px solid #f0f0f0 !important;
     }
 
-    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover {
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stExpander"] ::-webkit-scrollbar-thumb:hover,
+    .stDataFrame ::-webkit-scrollbar-thumb:hover,
+    .element-container ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stVerticalBlock"] ::-webkit-scrollbar-thumb:hover,
+    iframe ::-webkit-scrollbar-thumb:hover {
         background-color: #654321 !important;
+    }
+
+    /* Force scrollbar visibility — prevent auto-hide on macOS/trackpads */
+    [data-testid="stDataFrame"],
+    [data-testid="stDataEditor"],
+    .stDataFrame,
+    [data-testid="stExpander"] {
+        overflow: auto !important;
+        scrollbar-gutter: stable !important;
+    }
+
+    /* Firefox scrollbar styling */
+    [data-testid="stDataFrame"],
+    [data-testid="stDataEditor"],
+    .stDataFrame {
+        scrollbar-width: auto !important;
+        scrollbar-color: #8B4513 #f0f0f0 !important;
     }
 
     </style>

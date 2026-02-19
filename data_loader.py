@@ -145,7 +145,7 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
     Args:
         sheet_url: Google Sheet URL
         credentials_file: Path to credentials JSON
-        days: If specified, only load last N days
+        days: If specified, only load last N days (also skips old tabs for speed)
         site_name: Name of the site (NY, VT, etc.)
 
     Returns:
@@ -158,12 +158,33 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
         # Get all worksheets (monthly tabs)
         all_worksheets = sheet.worksheets()
 
+        # If days is specified, figure out which month tabs we actually need.
+        # This avoids downloading dozens of old tabs from Google Sheets.
+        needed_months = None
+        if days is not None:
+            cutoff_date = datetime.now() - timedelta(days=days)
+            needed_months = set()
+            d = cutoff_date.replace(day=1)
+            while d <= datetime.now():
+                needed_months.add((d.year, d.month))
+                # Advance to next month
+                if d.month == 12:
+                    d = d.replace(year=d.year + 1, month=1)
+                else:
+                    d = d.replace(month=d.month + 1)
+
         all_data = []
 
         for worksheet in all_worksheets:
             # Skip any non-date worksheets (like instructions, etc.)
             if not is_month_tab(worksheet.title):
                 continue
+
+            # Skip tabs for months outside our date range (big speed boost)
+            if needed_months is not None:
+                tab_month = _parse_tab_month(worksheet.title)
+                if tab_month and tab_month not in needed_months:
+                    continue
 
             try:
                 # Get data from this worksheet
@@ -188,7 +209,7 @@ def _load_vacuum_from_single_site(sheet_url, credentials_file, days=None, site_n
         # Add site column
         combined_df['Site'] = site_name
 
-        # Filter by date if specified
+        # Filter by date if specified (fine-grained filter after tab-level skip)
         if days is not None and 'Timestamp' in combined_df.columns:
             cutoff_date = datetime.now() - timedelta(days=days)
             combined_df = combined_df[combined_df['Timestamp'] >= cutoff_date]
@@ -803,6 +824,36 @@ def process_personnel_data(df):
             _st.info(f"Dedup: removed {dropped} duplicate personnel rows")
 
     return df
+
+
+def _parse_tab_month(tab_name):
+    """
+    Parse a worksheet tab name into a (year, month) tuple.
+    Returns None if the tab name cannot be parsed.
+    Supports: 'YYYY-MM', 'Month_YYYY', 'Month YYYY'
+    """
+    import calendar
+    tab_name = tab_name.strip()
+
+    # Pattern 1: YYYY-MM
+    m = re.match(r'^(\d{4})-(\d{2})$', tab_name)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+
+    # Pattern 2: Month_YYYY or Month YYYY
+    m = re.match(r'^([A-Za-z]{3,})[\s_](\d{4})$', tab_name)
+    if m:
+        month_str = m.group(1).capitalize()
+        year = int(m.group(2))
+        # Try full month names and abbreviations
+        for i, name in enumerate(calendar.month_name):
+            if name and name.lower().startswith(month_str.lower()):
+                return (year, i)
+        for i, name in enumerate(calendar.month_abbr):
+            if name and name.lower() == month_str[:3].lower():
+                return (year, i)
+
+    return None
 
 
 def is_month_tab(tab_name):
