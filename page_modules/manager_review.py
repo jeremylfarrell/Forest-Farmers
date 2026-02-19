@@ -76,9 +76,13 @@ def render(personnel_df, vacuum_df=None):
 
     with col3:
         # Approval status filter
+        status_options = ["All", "Pending Review", "Approved"]
+        # Add TSheets Updated option if any exist
+        if 'Approval Status' in df.columns and (df['Approval Status'] == 'TSheets Updated').any():
+            status_options.insert(2, "TSheets Updated")
         status_filter = st.radio(
             "Status",
-            ["All", "Pending Review", "Approved"],
+            status_options,
             index=0,
             key="mgr_review_status"
         )
@@ -106,25 +110,39 @@ def render(personnel_df, vacuum_df=None):
             filtered = filtered[filtered['Approval Status'] == 'Pending']
         elif status_filter == "Approved":
             filtered = filtered[filtered['Approval Status'] == 'Approved']
+        elif status_filter == "TSheets Updated":
+            filtered = filtered[filtered['Approval Status'] == 'TSheets Updated']
 
     # ------------------------------------------------------------------
     # SUMMARY METRICS
     # ------------------------------------------------------------------
     total_rows = len(filtered)
-    approved_count = len(filtered[filtered.get('Approval Status', pd.Series()) == 'Approved']) \
-        if 'Approval Status' in filtered.columns else 0
-    pending_count = total_rows - approved_count
-    approval_rate = (approved_count / total_rows * 100) if total_rows > 0 else 0
+    if 'Approval Status' in filtered.columns:
+        approved_count = len(filtered[filtered['Approval Status'] == 'Approved'])
+        updated_count = len(filtered[filtered['Approval Status'] == 'TSheets Updated'])
+        pending_count = total_rows - approved_count - updated_count
+    else:
+        approved_count = 0
+        updated_count = 0
+        pending_count = total_rows
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         st.metric("Total Rows", f"{total_rows:,}")
     with m2:
-        st.metric("Approved", f"{approved_count:,}")
-    with m3:
         st.metric("Pending", f"{pending_count:,}")
+    with m3:
+        st.metric("Approved", f"{approved_count:,}")
     with m4:
-        st.metric("Approval Rate", f"{approval_rate:.0f}%")
+        st.metric("TSheets Updated", f"{updated_count:,}",
+                   help="Rows that were approved but TSheets data has since changed. Needs re-review.")
+
+    if updated_count > 0:
+        st.warning(
+            f"**{updated_count} row(s) changed in TSheets since approval.** "
+            "Use the **TSheets Updated** filter to review them. "
+            "Re-approve after reviewing to clear the flag."
+        )
 
     st.divider()
 
@@ -221,27 +239,47 @@ def render(personnel_df, vacuum_df=None):
     )
 
     # ------------------------------------------------------------------
-    # APPROVE BUTTON
+    # APPROVE BUTTON (with confirmation)
     # ------------------------------------------------------------------
     st.markdown("")  # spacer
+
+    # Two-step approval: first click shows confirmation, second click saves
+    if 'confirm_approve' not in st.session_state:
+        st.session_state.confirm_approve = False
+
     col_btn, col_info = st.columns([1, 3])
 
-    with col_btn:
-        approve_clicked = st.button(
-            "✅ Approve Selected Data",
-            type="primary",
-            use_container_width=True,
-            key="approve_btn"
-        )
+    if not st.session_state.confirm_approve:
+        with col_btn:
+            if st.button(
+                "✅ Approve Selected Data",
+                type="primary",
+                use_container_width=True,
+                key="approve_btn"
+            ):
+                st.session_state.confirm_approve = True
+                st.rerun()
 
-    with col_info:
-        st.caption(
-            f"This will save **{len(edited_data)}** rows as manager-approved. "
-            "Approved data will replace the raw TSheets data in all dashboard calculations."
+        with col_info:
+            st.caption(
+                f"This will save **{len(edited_data)}** rows as manager-approved. "
+                "Approved data will replace the raw TSheets data in all dashboard calculations."
+            )
+    else:
+        # Confirmation step
+        st.warning(
+            f"**Are you sure?** This will approve **{len(edited_data)}** rows "
+            "and update the dashboard data."
         )
-
-    if approve_clicked:
-        _save_approved(edited_data)
+        col_yes, col_no, col_spacer = st.columns([1, 1, 2])
+        with col_yes:
+            if st.button("Yes, Approve", type="primary", use_container_width=True, key="confirm_yes"):
+                st.session_state.confirm_approve = False
+                _save_approved(edited_data)
+        with col_no:
+            if st.button("Cancel", use_container_width=True, key="confirm_no"):
+                st.session_state.confirm_approve = False
+                st.rerun()
 
     # ------------------------------------------------------------------
     # HELP
@@ -253,7 +291,7 @@ def render(personnel_df, vacuum_df=None):
         1. **Filter** the data by date range and/or employee to focus on specific entries
         2. **Review** each row — check hours, taps, mainlines, job codes, etc.
         3. **Edit** any cell that needs correction (click the cell to edit)
-        4. Click **✅ Approve Selected Data** when you're satisfied
+        4. Click **Approve Selected Data** — you'll get a confirmation prompt before it saves
 
         **What happens when you approve:**
         - All rows currently shown in the editor are saved to the
@@ -266,11 +304,21 @@ def render(personnel_df, vacuum_df=None):
         **Status column:**
         - **Pending** — raw TSheets data, not yet reviewed
         - **Approved** — data has been reviewed and approved by a manager
+        - **TSheets Updated** — was approved, but TSheets has since synced
+          new data for this row (e.g. hours or taps changed). The dashboard
+          still uses your approved version, but you should re-review and
+          re-approve to pick up the changes.
+
+        **TSheets change detection:**
+        When TSheets syncs updated data for a row you already approved
+        (e.g. someone corrected their hours in TSheets), the dashboard
+        detects the difference and flags it as **TSheets Updated**. Use
+        the filter to find these rows, review the changes, and re-approve.
 
         **Tips:**
         - Use the **Pending Review** filter to see only unapproved data
         - You can approve data in batches — filter by date range and approve a week at a time
-        - Changes are NOT saved until you click the Approve button
+        - Changes are NOT saved until you click the Approve button and confirm
         - After approving, the dashboard will refresh and all pages will use the corrected data
         """)
 

@@ -449,7 +449,11 @@ def merge_approved_data(raw_df, approved_df):
     Merge raw personnel data with manager-approved overrides.
     For rows where (Employee Name, Date, Job) exists in approved_df,
     use the approved version. Otherwise keep the raw version.
-    Adds 'Approval Status' column ('Approved' or 'Pending').
+    Adds 'Approval Status' column:
+      - 'Pending'         — raw data, not yet reviewed
+      - 'Approved'        — data reviewed and approved by manager
+      - 'TSheets Updated' — was approved, but TSheets has since changed
+                             the underlying raw data (needs re-review)
     """
     if raw_df.empty:
         return raw_df
@@ -481,12 +485,33 @@ def merge_approved_data(raw_df, approved_df):
 
     approved_keys = set(approved['_merge_key'].values)
 
+    # --- Detect TSheets changes since approval ---
+    # Compare key numeric fields between raw and approved.
+    # If TSheets updated hours/taps after approval, flag for re-review.
+    compare_cols = ['Hours', 'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed']
+    compare_cols = [c for c in compare_cols if c in raw.columns and c in approved.columns]
+
+    tsheets_updated_keys = set()
+    if compare_cols:
+        raw_lookup = raw.set_index('_merge_key')[compare_cols]
+        approved_lookup = approved.set_index('_merge_key')[compare_cols]
+
+        common_keys = raw_lookup.index.intersection(approved_lookup.index)
+        if len(common_keys) > 0:
+            raw_vals = raw_lookup.loc[common_keys].fillna(0)
+            appr_vals = approved_lookup.loc[common_keys].fillna(0)
+            # Flag rows where any numeric field differs
+            diffs = (raw_vals != appr_vals).any(axis=1)
+            tsheets_updated_keys = set(diffs[diffs].index)
+
     # Raw rows NOT overridden by approved data
     pending_rows = raw[~raw['_merge_key'].isin(approved_keys)].copy()
     pending_rows['Approval Status'] = 'Pending'
 
-    # Approved rows
-    approved['Approval Status'] = 'Approved'
+    # Approved rows — mark those with TSheets changes
+    approved['Approval Status'] = approved['_merge_key'].apply(
+        lambda k: 'TSheets Updated' if k in tsheets_updated_keys else 'Approved'
+    )
 
     # Combine: pending raw rows + approved rows
     merged = pd.concat([pending_rows, approved], ignore_index=True)
