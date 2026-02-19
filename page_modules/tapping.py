@@ -371,6 +371,13 @@ def render(personnel_df, vacuum_df):
             'Hours': 'sum',
         }).reset_index()
 
+        # Calculate days worked per employee+job combo (unique dates tapped)
+        days_worked = tapping_df[tapping_df['Taps_In'] > 0].groupby(
+            ['Employee', 'Job_Code']
+        )['Date'].apply(lambda x: x.dt.date.nunique()).reset_index(name='Days_Worked')
+        emp_stats = emp_stats.merge(days_worked, on=['Employee', 'Job_Code'], how='left')
+        emp_stats['Days_Worked'] = emp_stats['Days_Worked'].fillna(1).astype(int)
+
         # Calculate productivity metrics using only tapping hours
         emp_stats['Taps_Per_Hour'] = (emp_stats['Taps_In'] / emp_stats['Hours']).round(1)
         emp_stats['Taps_Per_Hour'] = emp_stats['Taps_Per_Hour'].replace([float('inf'), float('-inf')], 0)
@@ -378,13 +385,16 @@ def render(personnel_df, vacuum_df):
         emp_stats['Min_Per_Tap'] = ((emp_stats['Hours'] * 60) / emp_stats['Taps_In']).round(1)
         emp_stats['Min_Per_Tap'] = emp_stats['Min_Per_Tap'].replace([float('inf'), float('-inf')], 0)
 
+        emp_stats['Avg_Taps_Per_Day'] = (emp_stats['Taps_In'] / emp_stats['Days_Worked']).round(1)
+        emp_stats['Avg_Taps_Per_Day'] = emp_stats['Avg_Taps_Per_Day'].replace([float('inf'), float('-inf')], 0)
+
         # Sort by employee then total taps, filter to rows with actual taps
         emp_stats = emp_stats.sort_values(['Employee', 'Taps_In'], ascending=[True, False])
         emp_stats = emp_stats[emp_stats['Taps_In'] > 0]
 
         if not emp_stats.empty:
-            display = emp_stats[['Employee', 'Job_Code', 'Taps_In', 'Taps_Per_Hour', 'Min_Per_Tap', 'Hours']].copy()
-            display.columns = ['Employee', 'Type of Tapping', 'Total Taps', 'Taps/Hr', 'Min/Tap', 'Tapping Hours']
+            display = emp_stats[['Employee', 'Job_Code', 'Taps_In', 'Taps_Per_Hour', 'Avg_Taps_Per_Day', 'Min_Per_Tap', 'Hours']].copy()
+            display.columns = ['Employee', 'Type of Tapping', 'Total Taps', 'Taps/Hr', 'Avg Taps/Day', 'Min/Tap', 'Tapping Hours']
 
             # Format
             display['Tapping Hours'] = display['Tapping Hours'].apply(lambda x: f"{x:.1f}")
@@ -393,7 +403,7 @@ def render(personnel_df, vacuum_df):
             st.dataframe(display, use_container_width=True, hide_index=True, height=400)
 
             # Summary stats
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 st.metric("Employees Tracked", emp_stats['Employee'].nunique())
@@ -407,6 +417,11 @@ def render(personnel_df, vacuum_df):
             with col3:
                 overall_min = (total_tapping_hours * 60) / total_tapping_taps if total_tapping_taps > 0 else 0
                 st.metric("Avg Min/Tap", f"{overall_min:.1f}")
+
+            with col4:
+                total_days = tapping_df[tapping_df['Taps_In'] > 0]['Date'].dt.date.nunique()
+                overall_taps_day = total_tapping_taps / total_days if total_days > 0 else 0
+                st.metric("Avg Taps/Day", f"{overall_taps_day:.1f}")
         else:
             st.info("No tapping productivity data for selected time range")
     else:

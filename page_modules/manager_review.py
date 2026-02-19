@@ -33,6 +33,10 @@ def render(personnel_df, vacuum_df=None):
     st.subheader("Filters")
     col1, col2, col3 = st.columns(3)
 
+    # Figure out smart default date range: cover all pending data
+    has_pending = ('Approval Status' in df.columns and
+                   (df['Approval Status'].isin(['Pending', 'TSheets Updated'])).any())
+
     with col1:
         # Date range filter
         if 'Date' in df.columns:
@@ -43,7 +47,19 @@ def render(personnel_df, vacuum_df=None):
             if pd.isna(max_date):
                 max_date = datetime.now()
 
-            default_start = max(min_date, datetime.now() - timedelta(days=7))
+            # Smart default: if there's pending data, start from the oldest
+            # pending row so the manager sees everything that needs review.
+            # Otherwise fall back to last 7 days.
+            if has_pending:
+                pending_mask = df['Approval Status'].isin(['Pending', 'TSheets Updated'])
+                pending_dates = df.loc[pending_mask, 'Date'].dropna()
+                if not pending_dates.empty:
+                    default_start = pending_dates.min()
+                else:
+                    default_start = max(min_date, datetime.now() - timedelta(days=7))
+            else:
+                default_start = max(min_date, datetime.now() - timedelta(days=7))
+
             if default_start > max_date:
                 default_start = min_date
 
@@ -75,15 +91,19 @@ def render(personnel_df, vacuum_df=None):
             selected_employees = []
 
     with col3:
-        # Approval status filter
+        # Approval status filter — default to "Pending Review" if there's
+        # pending data so the manager immediately sees what needs attention
         status_options = ["All", "Pending Review", "Approved"]
         # Add TSheets Updated option if any exist
         if 'Approval Status' in df.columns and (df['Approval Status'] == 'TSheets Updated').any():
             status_options.insert(2, "TSheets Updated")
+
+        default_status_idx = 1 if has_pending else 0  # Default to Pending Review
+
         status_filter = st.radio(
             "Status",
             status_options,
-            index=0,
+            index=default_status_idx,
             key="mgr_review_status"
         )
 

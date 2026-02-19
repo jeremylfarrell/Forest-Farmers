@@ -16,8 +16,8 @@ import math
 
 def match_mainline_to_sensor(mainline, sensor_names):
     """
-    Match a mainline name to the closest sensor name
-    Uses fuzzy matching based on common patterns
+    Match a mainline name to the closest sensor name.
+    Uses progressive matching: exact → case-insensitive exact → same prefix+number.
 
     Args:
         mainline: Mainline name from personnel data (e.g., "RHAS13")
@@ -31,23 +31,22 @@ def match_mainline_to_sensor(mainline, sensor_names):
 
     mainline = str(mainline).strip().upper()
 
-    # Try exact match first
+    # Try exact match first (case-insensitive)
     for sensor in sensor_names:
         if str(sensor).strip().upper() == mainline:
             return sensor
 
-    # Try partial match - mainline contained in sensor name
+    # Try partial match — but only if one fully contains the other AND
+    # the shorter string is at least 3 chars (avoids single-letter mismatches)
     for sensor in sensor_names:
         sensor_upper = str(sensor).strip().upper()
-        if mainline in sensor_upper or sensor_upper in mainline:
-            return sensor
+        if len(mainline) >= 3 and len(sensor_upper) >= 3:
+            if mainline in sensor_upper or sensor_upper in mainline:
+                return sensor
 
-    # Try matching without numbers (e.g., "RHAS" matches "RHAS13")
-    mainline_alpha = re.sub(r'\d+', '', mainline)
-    for sensor in sensor_names:
-        sensor_alpha = re.sub(r'\d+', '', str(sensor).upper())
-        if mainline_alpha and sensor_alpha and mainline_alpha == sensor_alpha:
-            return sensor
+    # NOTE: We deliberately do NOT fall back to alpha-only matching (e.g.
+    # matching "LHW" prefix to any "LHW*" sensor) because that causes taps
+    # from LHW1, LHW2, etc. to all pile up on a single LHW0 sensor.
 
     return None
 
