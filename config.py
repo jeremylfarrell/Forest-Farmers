@@ -160,6 +160,12 @@ CRITICAL_SENSOR_COUNT = 20
 # Alert if no activity detected for this many days
 DAYS_WITHOUT_ACTIVITY_ALERT = 3
 
+# Freeze/thaw detection thresholds
+FREEZING_POINT = 32.0              # Temperature threshold (Fahrenheit)
+FREEZE_DROP_THRESHOLD = 2.0        # Vacuum drop (inches) during freeze to flag sensor
+FREEZE_DROP_RATE_LIKELY = 0.50     # Drop rate > 50% = "LIKELY LEAK"
+FREEZE_DROP_RATE_WATCH = 0.25      # Drop rate > 25% = "WATCH"
+
 # ============================================================================
 # ADVANCED SETTINGS - For developers
 # ============================================================================
@@ -177,9 +183,10 @@ MAX_TABLE_ROWS = 100
 FEATURES = {
     'show_trends': True,
     'show_predictions': False,  # Future feature
-    'show_weather': False,      # Future feature
+    'show_weather': True,       # Enabled for freeze/thaw analysis
     'enable_export': True,
-    'show_raw_data': True
+    'show_raw_data': True,
+    'show_freeze_analysis': True,  # Freeze/thaw leak detection
 }
 
 # ============================================================================

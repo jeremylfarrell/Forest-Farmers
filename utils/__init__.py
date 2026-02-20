@@ -41,6 +41,12 @@ from .ui_components import (
     display_heatmap
 )
 
+from .freeze_thaw import (
+    get_current_freeze_thaw_status,
+    detect_freeze_event_drops,
+    render_freeze_thaw_banner
+)
+
 __all__ = [
     # helpers
     'find_column',
@@ -73,5 +79,9 @@ __all__ = [
     'display_comparison_chart',
     'create_two_column_layout',
     'display_summary_statistics',
-    'display_heatmap'
+    'display_heatmap',
+    # freeze_thaw
+    'get_current_freeze_thaw_status',
+    'detect_freeze_event_drops',
+    'render_freeze_thaw_banner'
 ]

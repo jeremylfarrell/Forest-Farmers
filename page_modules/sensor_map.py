@@ -1,7 +1,7 @@
 """
 Interactive Map Page Module - MULTI-SITE POLISHED
 Geographic visualization of sensor locations with performance overlay
-Now with site color coding, legend, and tap count display
+Now with site color coding, legend, tap count display, and freeze alert mode
 """
 
 import streamlit as st
@@ -10,6 +10,7 @@ import folium
 from streamlit_folium import st_folium
 import config
 from utils import find_column, get_vacuum_column
+from utils.freeze_thaw import get_current_freeze_thaw_status, detect_freeze_event_drops
 import re
 import math
 
@@ -138,6 +139,20 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     st.title("🌍 Interactive Sensor Map")
     st.markdown("*Geographic visualization of sensor locations and performance*")
 
+    # Compact weather status line
+    freeze_status = get_current_freeze_thaw_status()
+    _fs_label = freeze_status.get('status_label', 'UNKNOWN')
+    _fs_temp = freeze_status.get('current_temp')
+    _temp_str = f"{_fs_temp:.0f}°F" if _fs_temp is not None else "N/A"
+    if _fs_label == 'CRITICAL':
+        st.caption(f"🔴 **FREEZE/THAW ACTIVE** — {_temp_str} — Vacuum drops reveal open lines")
+    elif _fs_label == 'UPCOMING':
+        st.caption(f"🟡 **Freeze/thaw expected tomorrow** — Currently {_temp_str}")
+    elif _fs_label == 'LOW PRIORITY':
+        st.caption(f"🟢 No freeze cycle — Currently {_temp_str}")
+    else:
+        st.caption("Weather status unavailable")
+
     if vacuum_df.empty:
         st.warning("No vacuum data available for mapping")
         return
@@ -260,9 +275,13 @@ def render(vacuum_df, personnel_df, repairs_df=None):
 
     with col2:
         if vacuum_col:
+            color_options = ["Vacuum Performance"]
+            if has_site:
+                color_options.append("Site")
+            color_options.append("Freeze Alert")
             color_by = st.selectbox(
                 "Color Markers By",
-                ["Vacuum Performance", "Site"] if has_site else ["Vacuum Performance"],
+                color_options,
                 help="How to color the sensor markers"
             )
         else:
@@ -270,6 +289,20 @@ def render(vacuum_df, personnel_df, repairs_df=None):
 
     with col3:
         st.caption("Dot size reflects tap count")
+
+    # Pre-compute freeze data for Freeze Alert mode and popups
+    from page_modules.vacuum import get_temperature_data
+    _freeze_temp_data = get_temperature_data(days=7)
+    _freeze_drops = detect_freeze_event_drops(vacuum_df, _freeze_temp_data)
+    _freeze_lookup = {}
+    if not _freeze_drops.empty:
+        for _, frow in _freeze_drops.iterrows():
+            _freeze_lookup[frow['Sensor']] = {
+                'status': frow['Freeze_Status'],
+                'drop_rate': frow['Drop_Rate'],
+                'days_with_drop': frow['Freeze_Days_With_Drop'],
+                'total_days': frow['Total_Freeze_Days'],
+            }
 
     # Collect all dates and employees from installations first
     all_employees = set()
@@ -392,17 +425,31 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         attr=attr
     )
 
-    # Add legend if multi-site
+    # Add legend based on color mode
     if has_site and color_by == "Site":
         legend_html = '''
-        <div style="position: fixed; 
-                    top: 10px; right: 10px; width: 150px; height: auto; 
-                    background-color: white; border:2px solid grey; z-index:9999; 
+        <div style="position: fixed;
+                    top: 10px; right: 10px; width: 150px; height: auto;
+                    background-color: white; border:2px solid grey; z-index:9999;
                     font-size:14px; padding: 10px; border-radius: 5px;">
         <p style="margin: 0; font-weight: bold; text-align: center;">Site Legend</p>
         <p style="margin: 5px 0;"><span style="color: #2196F3; font-size: 20px;">●</span> NY</p>
         <p style="margin: 5px 0;"><span style="color: #4CAF50; font-size: 20px;">●</span> VT</p>
         <p style="margin: 5px 0;"><span style="color: #9E9E9E; font-size: 20px;">●</span> UNK</p>
+        </div>
+        '''
+        m.get_root().html.add_child(folium.Element(legend_html))
+    elif color_by == "Freeze Alert":
+        legend_html = '''
+        <div style="position: fixed;
+                    top: 10px; right: 10px; width: 180px; height: auto;
+                    background-color: white; border:2px solid grey; z-index:9999;
+                    font-size:14px; padding: 10px; border-radius: 5px;">
+        <p style="margin: 0; font-weight: bold; text-align: center;">Freeze Alert</p>
+        <p style="margin: 5px 0;"><span style="color: #e74c3c; font-size: 20px;">&#9679;</span> Likely Leak</p>
+        <p style="margin: 5px 0;"><span style="color: #f39c12; font-size: 20px;">&#9679;</span> Watch</p>
+        <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> OK</p>
+        <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Data</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -439,6 +486,22 @@ def render(vacuum_df, personnel_df, repairs_df=None):
             else:
                 color = 'gray'
                 status = "⚫ Unknown Site"
+        elif color_by == "Freeze Alert":
+            freeze_info = _freeze_lookup.get(row['Sensor'])
+            if freeze_info:
+                fz_status = freeze_info['status']
+                if fz_status == 'LIKELY LEAK':
+                    color = 'red'
+                    status = f"🔴 Likely Leak ({freeze_info['drop_rate']:.0%})"
+                elif fz_status == 'WATCH':
+                    color = 'orange'
+                    status = f"🟠 Watch ({freeze_info['drop_rate']:.0%})"
+                else:
+                    color = 'green'
+                    status = "🟢 OK — Stable during freeze"
+            else:
+                color = 'gray'
+                status = "No freeze data"
         else:
             color = 'blue'
             status = "Sensor"
@@ -461,6 +524,26 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         if vacuum_col and 'Vacuum' in row and pd.notna(row['Vacuum']):
             popup_html += f"<p style='margin: 5px 0;'><b>Vacuum:</b> {row['Vacuum']:.1f}\"</p>"
             popup_html += f"<p style='margin: 5px 0;'><b>Status:</b> {status}</p>"
+
+        # Freeze event info line (shown in all color modes)
+        _sensor_freeze = _freeze_lookup.get(row['Sensor'])
+        if _sensor_freeze:
+            _fz_days = _sensor_freeze['days_with_drop']
+            _fz_total = _sensor_freeze['total_days']
+            _fz_rate = _sensor_freeze['drop_rate']
+            _fz_st = _sensor_freeze['status']
+            if _fz_st == 'LIKELY LEAK':
+                _fz_color = '#e74c3c'
+                _fz_icon = '❄️🔴'
+            elif _fz_st == 'WATCH':
+                _fz_color = '#f39c12'
+                _fz_icon = '❄️🟠'
+            else:
+                _fz_color = '#27ae60'
+                _fz_icon = '❄️🟢'
+            popup_html += f"<p style='margin: 5px 0; color: {_fz_color};'><b>{_fz_icon} Freeze Events:</b> Dropped {_fz_days}/{_fz_total} days ({_fz_rate:.0%})</p>"
+        elif _freeze_drops is not None and not _freeze_drops.empty:
+            popup_html += "<p style='margin: 5px 0; color: #27ae60;'><b>❄️ Freeze Events:</b> Stable</p>"
 
         if tap_count > 0:
             popup_html += f"<p style='margin: 5px 0;'><b>Total Taps Installed:</b> {int(tap_count):,}</p>"
@@ -684,7 +767,13 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         - 🟦 Blue: NY site
         - 🟩 Green: VT site
         - ⚫ Gray: Unknown site
-        
+
+        When coloring by **Freeze Alert**:
+        - 🔴 Red: Likely Leak — vacuum dropped on 50%+ of freeze/thaw days
+        - 🟠 Orange: Watch — vacuum dropped on 25-50% of freeze/thaw days
+        - 🟢 Green: OK — stable during freeze events
+        - ⚪ Gray: Insufficient freeze data
+
         **Multi-Site Viewing:**
         
         When viewing all sites:

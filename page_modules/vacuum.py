@@ -2,6 +2,7 @@
 Vacuum Performance Page Module - MULTI-SITE POLISHED
 Shows performance metrics for each vacuum sensor and system trends
 UPDATED: Maple-only filtering, daily trends with hourly drill-down, temp-aware weekly view
+UPDATED: Freeze/thaw smart display — highlights critical monitoring periods
 """
 
 import streamlit as st
@@ -9,6 +10,11 @@ import pandas as pd
 import requests
 import config
 from utils import find_column, get_vacuum_column
+from utils.freeze_thaw import (
+    get_current_freeze_thaw_status,
+    detect_freeze_event_drops,
+    render_freeze_thaw_banner
+)
 
 
 def get_temperature_data(days=7):
@@ -47,6 +53,10 @@ def render(vacuum_df, personnel_df):
     """Render vacuum performance page with site context"""
 
     st.title("🔧 Vacuum Performance")
+
+    # Freeze/thaw context banner — tells manager if this page is worth studying now
+    freeze_status = get_current_freeze_thaw_status()
+    render_freeze_thaw_banner(freeze_status)
 
     if vacuum_df.empty:
         st.warning("No vacuum data available")
@@ -164,6 +174,37 @@ def render(vacuum_df, personnel_df):
                         hovertemplate='<b>%{x|%B %d}</b><br>High: %{y:.0f}°F<extra></extra>'
                     ))
                 
+                # Add freeze/thaw day highlighting (blue bands)
+                if temp_data is not None and 'Low' in temp_data.columns:
+                    for _, trow in temp_data.iterrows():
+                        t_high = trow.get('High')
+                        t_low = trow.get('Low')
+                        if t_high is not None and t_low is not None:
+                            if t_low < config.FREEZING_POINT and t_high > config.FREEZING_POINT:
+                                d = trow['Date']
+                                if hasattr(d, 'date'):
+                                    d = d.date()
+                                fig.add_vrect(
+                                    x0=pd.Timestamp(d) - pd.Timedelta(hours=12),
+                                    x1=pd.Timestamp(d) + pd.Timedelta(hours=12),
+                                    fillcolor="rgba(100, 149, 237, 0.15)",
+                                    line_width=0,
+                                    annotation_text="F/T",
+                                    annotation_position="top left",
+                                    annotation_font_size=9,
+                                    annotation_font_color="cornflowerblue",
+                                )
+
+                # Add 32°F freeze reference line on temp axis
+                if 'High' in display_daily.columns:
+                    fig.add_hline(
+                        y=config.FREEZING_POINT, line_dash="dash",
+                        line_color="lightblue", line_width=1,
+                        annotation_text="32°F",
+                        annotation_font_color="lightblue",
+                        yref="y2"
+                    )
+
                 # Update layout
                 fig.update_layout(
                     yaxis=dict(
@@ -181,7 +222,7 @@ def render(vacuum_df, personnel_df):
                     hovermode='x unified',
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                 )
-                
+
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Show data summary
@@ -286,6 +327,77 @@ def render(vacuum_df, personnel_df):
     st.divider()
 
     # ============================================================================
+    # FREEZE EVENT ANALYSIS
+    # ============================================================================
+
+    # Get temperature data for freeze analysis (reuse if already fetched above)
+    freeze_temp_data = get_temperature_data(days=7)
+    freeze_drops_df = detect_freeze_event_drops(vacuum_df, freeze_temp_data)
+
+    is_critical = freeze_status.get('status_label') in ('CRITICAL', 'UPCOMING')
+
+    if is_critical and not freeze_drops_df.empty:
+        # Prominent display during freeze events
+        st.subheader("❄️ Freeze Event Leak Detection")
+        st.caption("Sensors whose vacuum dropped during freeze/thaw days — potential open or leaking lines")
+
+        likely_count = len(freeze_drops_df[freeze_drops_df['Freeze_Status'] == 'LIKELY LEAK'])
+        watch_count = len(freeze_drops_df[freeze_drops_df['Freeze_Status'] == 'WATCH'])
+        ok_count = len(freeze_drops_df[freeze_drops_df['Freeze_Status'] == 'OK'])
+
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            st.metric("🔴 Likely Leak", likely_count)
+        with fc2:
+            st.metric("🟠 Watch", watch_count)
+        with fc3:
+            st.metric("🟢 OK", ok_count)
+
+        # Show flagged sensors table
+        flagged = freeze_drops_df[freeze_drops_df['Freeze_Status'] != 'OK'].copy()
+        if not flagged.empty:
+            display_freeze = flagged.copy()
+            display_freeze['Drop_Rate'] = (display_freeze['Drop_Rate'] * 100).round(0).astype(int).astype(str) + '%'
+            display_freeze['Avg_Drop'] = display_freeze['Avg_Drop'].apply(lambda x: f'{x:.1f}"')
+            display_freeze['Latest_Vacuum'] = display_freeze['Latest_Vacuum'].apply(lambda x: f'{x:.1f}"')
+            display_freeze.columns = ['Sensor', 'Avg Drop', 'Freeze Days w/ Drop',
+                                       'Total Freeze Days', 'Drop Rate', 'Latest Vacuum', 'Status']
+            st.dataframe(display_freeze, use_container_width=True, hide_index=True)
+
+            # Chart: top 5 flagged sensors vacuum over time with freeze-day shading
+            top_flagged = flagged.head(5)['Sensor'].tolist()
+            _render_freeze_sensor_chart(vacuum_df, freeze_temp_data, top_flagged)
+        else:
+            st.success("No sensors flagged during recent freeze events.")
+
+    elif not freeze_drops_df.empty:
+        # Low priority — collapse into expander
+        with st.expander("❄️ Freeze Event Analysis (not currently active)"):
+            st.caption("No freeze/thaw transition today. Historical freeze analysis shown below.")
+            likely_count = len(freeze_drops_df[freeze_drops_df['Freeze_Status'] == 'LIKELY LEAK'])
+            watch_count = len(freeze_drops_df[freeze_drops_df['Freeze_Status'] == 'WATCH'])
+            if likely_count > 0 or watch_count > 0:
+                st.markdown(f"**{likely_count}** likely leak(s), **{watch_count}** watch sensor(s) from recent freeze events.")
+                display_freeze = freeze_drops_df[freeze_drops_df['Freeze_Status'] != 'OK'].copy()
+                if not display_freeze.empty:
+                    display_freeze['Drop_Rate'] = (display_freeze['Drop_Rate'] * 100).round(0).astype(int).astype(str) + '%'
+                    display_freeze['Avg_Drop'] = display_freeze['Avg_Drop'].apply(lambda x: f'{x:.1f}"')
+                    display_freeze['Latest_Vacuum'] = display_freeze['Latest_Vacuum'].apply(lambda x: f'{x:.1f}"')
+                    display_freeze.columns = ['Sensor', 'Avg Drop', 'Freeze Days w/ Drop',
+                                               'Total Freeze Days', 'Drop Rate', 'Latest Vacuum', 'Status']
+                    st.dataframe(display_freeze, use_container_width=True, hide_index=True)
+            else:
+                st.info("All sensors held vacuum well during recent freeze events.")
+    else:
+        with st.expander("❄️ Freeze Event Analysis"):
+            st.info(
+                "Not enough freeze/thaw data for analysis. "
+                "Use **Load More Vacuum Data (60 days)** in the sidebar for a fuller picture."
+            )
+
+    st.divider()
+
+    # ============================================================================
     # SENSOR DETAILS SECTION
     # ============================================================================
 
@@ -338,14 +450,31 @@ def render(vacuum_df, personnel_df):
         last_report.columns = ['Sensor', 'Last_Report']
         summary = summary.merge(last_report, on='Sensor', how='left')
 
+    # Add freeze alert info to sensor summary
+    if not freeze_drops_df.empty:
+        freeze_merge = freeze_drops_df[['Sensor', 'Freeze_Status', 'Drop_Rate']].copy()
+        summary = summary.merge(freeze_merge, on='Sensor', how='left')
+        summary['Freeze_Status'] = summary['Freeze_Status'].fillna('')
+        summary['Drop_Rate'] = summary['Drop_Rate'].fillna(0)
+    else:
+        summary['Freeze_Status'] = ''
+        summary['Drop_Rate'] = 0
+
     # Filters
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         status_filter = st.selectbox("Filter by Status", ["All", "🟢 Excellent", "🟡 Fair", "🔴 Poor"])
 
     with col2:
         min_vacuum = st.number_input("Min Vacuum", 0.0, 30.0, 0.0, 0.5)
+
+    with col3:
+        show_freeze_only = st.checkbox(
+            "❄️ Freeze-flagged only",
+            value=False,
+            help="Show only sensors flagged during freeze events"
+        )
 
     # Apply filters
     filtered = summary.copy()
@@ -355,6 +484,9 @@ def render(vacuum_df, personnel_df):
 
     if min_vacuum > 0:
         filtered = filtered[filtered['Avg_Vacuum'] >= min_vacuum]
+
+    if show_freeze_only:
+        filtered = filtered[filtered['Freeze_Status'].isin(['LIKELY LEAK', 'WATCH'])]
 
     st.divider()
 
@@ -425,6 +557,20 @@ def render(vacuum_df, personnel_df):
         display_cols.append('Last_Report_Display')
         col_names.append('Last Report')
 
+    # Add freeze alert column
+    if 'Freeze_Status' in display.columns:
+        def _freeze_icon(val):
+            if val == 'LIKELY LEAK':
+                return '🔴 LEAK'
+            elif val == 'WATCH':
+                return '🟠 WATCH'
+            elif val == 'OK':
+                return '✅'
+            return ''
+        display['Freeze_Alert'] = display['Freeze_Status'].apply(_freeze_icon)
+        display_cols.append('Freeze_Alert')
+        col_names.append('❄️ Freeze')
+
     display = display[display_cols]
     display.columns = col_names
 
@@ -469,10 +615,87 @@ def render(vacuum_df, personnel_df):
         - Useful for troubleshooting time-specific issues
         - See which hours have best/worst performance
         
+        **Freeze Event Analysis:**
+
+        - During freeze/thaw transitions (low < 32°F, high > 32°F), open or
+          leaking lines freeze faster than sealed ones
+        - The dashboard compares each sensor's vacuum on freeze days vs the prior day
+        - **LIKELY LEAK**: Vacuum dropped on >50% of freeze days
+        - **WATCH**: Vacuum dropped on >25% of freeze days
+        - Use "❄️ Freeze-flagged only" checkbox to filter the sensor table
+        - Load 60 days of data for the best freeze analysis
+
         **Best Practices:**
-        
+
         - Focus on above-freezing days for meaningful trends
         - Use hourly view to diagnose daily performance patterns
+        - During freeze events, check the Freeze Event Analysis section first
         - Compare similar sensors for patterns
         - Monitor maple systems specifically for sap quality
         """)
+
+
+def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
+    """Render a plotly chart showing vacuum trends for flagged sensors with freeze-day shading."""
+    import plotly.graph_objects as go
+    from utils import find_column, get_vacuum_column
+
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
+    vacuum_col = get_vacuum_column(vacuum_df)
+    timestamp_col = find_column(
+        vacuum_df, 'Last communication', 'Last Communication',
+        'Timestamp', 'timestamp'
+    )
+
+    if not all([sensor_col, vacuum_col, timestamp_col]):
+        return
+
+    vdf = vacuum_df.copy()
+    vdf[timestamp_col] = pd.to_datetime(vdf[timestamp_col], errors='coerce')
+    vdf = vdf.dropna(subset=[timestamp_col])
+    vdf['Date'] = vdf[timestamp_col].dt.date
+
+    fig = go.Figure()
+
+    colors = ['#d62728', '#ff7f0e', '#e377c2', '#bcbd22', '#17becf']
+    for i, sensor in enumerate(sensor_list):
+        sdata = vdf[vdf[sensor_col] == sensor].copy()
+        daily = sdata.groupby('Date')[vacuum_col].mean().reset_index()
+        daily['Date'] = pd.to_datetime(daily['Date'])
+        daily = daily.sort_values('Date')
+
+        fig.add_trace(go.Scatter(
+            x=daily['Date'], y=daily[vacuum_col],
+            mode='lines+markers', name=sensor,
+            line=dict(color=colors[i % len(colors)], width=2),
+            marker=dict(size=6),
+        ))
+
+    # Add freeze-day shading
+    if temp_data is not None and 'Low' in temp_data.columns:
+        freezing = config.FREEZING_POINT
+        for _, row in temp_data.iterrows():
+            t_high = row.get('High')
+            t_low = row.get('Low')
+            if t_high is not None and t_low is not None:
+                if t_low < freezing and t_high > freezing:
+                    d = row['Date']
+                    if hasattr(d, 'date'):
+                        d = d.date()
+                    fig.add_vrect(
+                        x0=pd.Timestamp(d) - pd.Timedelta(hours=12),
+                        x1=pd.Timestamp(d) + pd.Timedelta(hours=12),
+                        fillcolor="rgba(100, 149, 237, 0.15)",
+                        line_width=0,
+                    )
+
+    fig.update_layout(
+        title="Flagged Sensors — Vacuum During Freeze Events",
+        yaxis_title="Average Vacuum (inches)",
+        xaxis_title="Date",
+        height=350,
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
