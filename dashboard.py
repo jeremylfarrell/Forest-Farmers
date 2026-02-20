@@ -336,7 +336,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.1 Fast Load | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.2 Manager Auth | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state

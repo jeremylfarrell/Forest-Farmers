@@ -37,6 +37,17 @@ def render(personnel_df, vacuum_df=None):
     has_pending = ('Approval Status' in df.columns and
                    (df['Approval Status'].isin(['Pending', 'TSheets Updated'])).any())
 
+    # Pre-compute counts for status labels (on full dataset before filtering)
+    _all_count = len(df)
+    if 'Approval Status' in df.columns:
+        _pending_count = len(df[df['Approval Status'] == 'Pending'])
+        _approved_count = len(df[df['Approval Status'] == 'Approved'])
+        _updated_count = len(df[df['Approval Status'] == 'TSheets Updated'])
+    else:
+        _pending_count = _all_count
+        _approved_count = 0
+        _updated_count = 0
+
     with col1:
         # Date range filter
         if 'Date' in df.columns:
@@ -47,19 +58,18 @@ def render(personnel_df, vacuum_df=None):
             if pd.isna(max_date):
                 max_date = datetime.now()
 
-            # Smart default: if there's pending data, start from the oldest
-            # pending row so the manager sees everything that needs review.
-            # Otherwise fall back to last 7 days.
+            # Smart default: always include at least last 14 days so recent
+            # data is visible regardless of status.  If there is pending data,
+            # extend back to cover the oldest pending row as well.
+            default_start = datetime.now() - timedelta(days=14)
             if has_pending:
                 pending_mask = df['Approval Status'].isin(['Pending', 'TSheets Updated'])
                 pending_dates = df.loc[pending_mask, 'Date'].dropna()
                 if not pending_dates.empty:
-                    default_start = pending_dates.min()
-                else:
-                    default_start = max(min_date, datetime.now() - timedelta(days=7))
-            else:
-                default_start = max(min_date, datetime.now() - timedelta(days=7))
+                    default_start = min(default_start, pending_dates.min())
 
+            # Clamp to available data range
+            default_start = max(min_date, default_start)
             if default_start > max_date:
                 default_start = min_date
 
@@ -91,21 +101,28 @@ def render(personnel_df, vacuum_df=None):
             selected_employees = []
 
     with col3:
-        # Approval status filter — default to "Pending Review" if there's
-        # pending data so the manager immediately sees what needs attention
-        status_options = ["All", "Pending Review", "Approved"]
+        # Approval status filter — default to "All" so the manager can see
+        # everything, including recently approved data.  Counts help spot
+        # items needing attention at a glance.
+        status_options = [
+            f"All ({_all_count})",
+            f"Pending Review ({_pending_count})",
+            f"Approved ({_approved_count})",
+        ]
         # Add TSheets Updated option if any exist
-        if 'Approval Status' in df.columns and (df['Approval Status'] == 'TSheets Updated').any():
-            status_options.insert(2, "TSheets Updated")
+        if _updated_count > 0:
+            status_options.insert(2, f"TSheets Updated ({_updated_count})")
 
-        default_status_idx = 1 if has_pending else 0  # Default to Pending Review
+        default_status_idx = 0  # Always show all statuses by default
 
-        status_filter = st.radio(
+        status_filter_raw = st.radio(
             "Status",
             status_options,
             index=default_status_idx,
             key="mgr_review_status"
         )
+        # Strip the count suffix for filtering logic
+        status_filter = status_filter_raw.split(" (")[0]
 
     # ------------------------------------------------------------------
     # APPLY FILTERS
@@ -219,11 +236,61 @@ def render(personnel_df, vacuum_df=None):
     edit_df = edit_df.reset_index(drop=True)
 
     # ------------------------------------------------------------------
-    # DATA EDITOR
+    # MANAGER EDIT PASSWORD GATE
+    # ------------------------------------------------------------------
+    manager_edit_authorized = st.session_state.get("manager_edit_authorized", False)
+
+    if not manager_edit_authorized:
+        st.subheader(f"Personnel Data ({len(edit_df)} rows)")
+        st.caption("*Read-only view. Enter the manager password below to edit and approve data.*")
+
+        # Read-only table
+        st.dataframe(
+            edit_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(500 + len(edit_df) * 5, 900),
+        )
+
+        st.divider()
+
+        # Password input to unlock editing
+        st.markdown("🔒 **Manager Edit Access**")
+
+        def _manager_password_entered():
+            """Callback for manager password input"""
+            if "manager_password_input" not in st.session_state:
+                return
+            entered = st.session_state["manager_password_input"]
+            # Check against Streamlit secrets first, fall back to hardcoded default
+            try:
+                correct_pw = st.secrets["passwords"]["manager_password"]
+            except (KeyError, FileNotFoundError, AttributeError):
+                correct_pw = "MapleBirch"
+            if entered == correct_pw:
+                st.session_state["manager_edit_authorized"] = True
+                del st.session_state["manager_password_input"]
+            else:
+                st.session_state["manager_edit_pw_wrong"] = True
+
+        st.text_input(
+            "Enter manager password to edit & approve",
+            type="password",
+            on_change=_manager_password_entered,
+            key="manager_password_input",
+        )
+        if st.session_state.get("manager_edit_pw_wrong"):
+            st.error("Incorrect password")
+            st.session_state["manager_edit_pw_wrong"] = False
+
+        return  # Don't show editor or approve button until authorized
+
+    # ------------------------------------------------------------------
+    # DATA EDITOR (authorized managers only)
     # ------------------------------------------------------------------
     st.subheader(f"Personnel Data ({len(edit_df)} rows)")
     st.caption(
-        "Edit any cell below. When done reviewing, click **✅ Approve Selected Data** "
+        "Edit any cell below. When done reviewing, click **Approve Selected Data** "
         "to save your corrections."
     )
 
@@ -309,9 +376,10 @@ def render(personnel_df, vacuum_df=None):
         **Workflow:**
 
         1. **Filter** the data by date range and/or employee to focus on specific entries
-        2. **Review** each row — check hours, taps, mainlines, job codes, etc.
-        3. **Edit** any cell that needs correction (click the cell to edit)
-        4. Click **Approve Selected Data** — you'll get a confirmation prompt before it saves
+        2. **Enter the manager password** to unlock editing (the table is read-only until you authenticate)
+        3. **Review** each row — check hours, taps, mainlines, job codes, etc.
+        4. **Edit** any cell that needs correction (click the cell to edit)
+        5. Click **Approve Selected Data** — you'll get a confirmation prompt before it saves
 
         **What happens when you approve:**
         - All rows currently shown in the editor are saved to the
