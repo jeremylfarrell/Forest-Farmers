@@ -190,12 +190,18 @@ def render(personnel_df, vacuum_df=None):
     # ------------------------------------------------------------------
     # PREPARE EDITABLE DATAFRAME
     # ------------------------------------------------------------------
-    # Select and order columns for the editor
+    # Select and order columns for the editor — show ALL columns the
+    # manager wants to see, through Notes.  Vehicle Used is optional.
     display_cols = [
         'Employee Name', 'Date', 'Hours', 'Rate', 'Job', 'mainline.',
         'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed',
         'Notes', 'Site', 'Clock In', 'Clock Out', 'Approval Status'
     ]
+    # Also include any other columns the manager might want to see
+    # (e.g., Vehicle Used if it exists in the data)
+    for extra_col in filtered.columns:
+        if extra_col not in display_cols and extra_col not in ('_merge_key',):
+            display_cols.append(extra_col)
     # Only use columns that exist
     display_cols = [c for c in display_cols if c in filtered.columns]
 
@@ -369,6 +375,83 @@ def render(personnel_df, vacuum_df=None):
                 st.rerun()
 
     # ------------------------------------------------------------------
+    # EXCEL UPLOAD — Replace / Fix Personnel Data
+    # ------------------------------------------------------------------
+    if manager_edit_authorized:
+        st.divider()
+        st.subheader("📤 Upload Corrected Excel Data")
+        st.markdown(
+            "*Upload a corrected Excel file to replace the approved personnel data. "
+            "The file should have the same column headers as the data above. "
+            "This is useful for fixing historical data or bulk corrections.*"
+        )
+
+        uploaded = st.file_uploader(
+            "Upload Excel (.xlsx) or CSV (.csv)",
+            type=["xlsx", "csv"],
+            key="mgr_upload_file"
+        )
+
+        if uploaded is not None:
+            try:
+                if uploaded.name.endswith('.csv'):
+                    upload_df = pd.read_csv(uploaded)
+                else:
+                    upload_df = pd.read_excel(uploaded)
+
+                st.success(f"Loaded {len(upload_df)} rows from **{uploaded.name}**")
+                st.dataframe(upload_df.head(10), use_container_width=True, hide_index=True)
+
+                if st.button("✅ Replace Approved Data with This File", type="primary",
+                             key="upload_replace_btn"):
+                    # Process the uploaded data and save as approved
+                    save_df = upload_df.copy()
+
+                    # Convert Date column
+                    if 'Date' in save_df.columns:
+                        save_df['Date'] = pd.to_datetime(save_df['Date'], errors='coerce')
+
+                    # Add approval metadata
+                    save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                    save_df['Approved By'] = 'Manager (Excel Upload)'
+
+                    if 'Approval Status' in save_df.columns:
+                        save_df = save_df.drop(columns=['Approval Status'])
+
+                    # Get sheet URL
+                    sheet_url = None
+                    credentials_file = 'credentials.json'
+                    try:
+                        if hasattr(st, 'secrets') and 'sheets' in st.secrets:
+                            sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
+                    except (KeyError, FileNotFoundError):
+                        pass
+                    if not sheet_url:
+                        try:
+                            import os as _os
+                            from dotenv import load_dotenv
+                            load_dotenv()
+                            sheet_url = _os.getenv('PERSONNEL_SHEET_URL')
+                        except ImportError:
+                            pass
+
+                    if sheet_url:
+                        with st.spinner("Uploading corrected data..."):
+                            success, message = save_approved_personnel(
+                                sheet_url, credentials_file, save_df
+                            )
+                        if success:
+                            st.success(f"✅ {message}")
+                            st.balloons()
+                            st.rerun()
+                        else:
+                            st.error(f"❌ {message}")
+                    else:
+                        st.error("Could not find sheet URL in configuration.")
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+
+    # ------------------------------------------------------------------
     # HELP
     # ------------------------------------------------------------------
     with st.expander("ℹ️ How to use Manager Data Review"):
@@ -386,8 +469,16 @@ def render(personnel_df, vacuum_df=None):
           `approved_personnel` tab in Google Sheets
         - Approved data automatically overrides the raw TSheets data
           for all dashboard pages (Tapping Operations, Employee Performance, etc.)
+        - **IMPORTANT:** Other pages (Tapping, Repairs, etc.) will ONLY show
+          data that has been approved here. Pending data stays hidden until approved.
         - If you re-approve the same row (same Employee + Date + Job),
           it updates the existing entry — no duplicates
+
+        **Excel Upload:**
+        - If you need to fix historical data in bulk, use the Excel upload
+          feature at the bottom of this page (requires manager password)
+        - Upload a corrected .xlsx or .csv file to replace the approved data
+        - The file should have the same column headers as the table above
 
         **Status column:**
         - **Pending** — raw TSheets data, not yet reviewed
@@ -396,12 +487,6 @@ def render(personnel_df, vacuum_df=None):
           new data for this row (e.g. hours or taps changed). The dashboard
           still uses your approved version, but you should re-review and
           re-approve to pick up the changes.
-
-        **TSheets change detection:**
-        When TSheets syncs updated data for a row you already approved
-        (e.g. someone corrected their hours in TSheets), the dashboard
-        detects the difference and flags it as **TSheets Updated**. Use
-        the filter to find these rows, review the changes, and re-approve.
 
         **Tips:**
         - Use the **Pending Review** filter to see only unapproved data

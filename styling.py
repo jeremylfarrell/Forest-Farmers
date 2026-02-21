@@ -337,12 +337,18 @@ def apply_custom_css():
 
     /* ========================================
        SCROLLBAR STYLING
-       One single visible scrollbar for the page.
-       Data tables get their own horizontal scrollbar
-       only when needed.
+       Style ALL scrollbars (including Streamlit's
+       internal iframe) with the maroon maple theme.
        ======================================== */
 
-    /* Main page scrollbar — always visible */
+    /* Universal scrollbar styling — applies to every
+       scrollable element including Streamlit's inner
+       containers, iframes, data tables, etc. */
+    *, *::before, *::after {
+        scrollbar-width: auto !important;
+        scrollbar-color: #8B4513 #f0f0f0 !important;
+    }
+
     ::-webkit-scrollbar {
         width: 14px !important;
         height: 14px !important;
@@ -355,34 +361,56 @@ def apply_custom_css():
         background-color: #8B4513 !important;
         border-radius: 7px !important;
         border: 2px solid #f0f0f0 !important;
+        min-height: 40px !important;
     }
     ::-webkit-scrollbar-thumb:hover {
         background-color: #654321 !important;
     }
 
-    /* Remove duplicate inner scrollbars from Streamlit's internal wrappers.
-       The main page scroll handles vertical scrolling; only keep
-       horizontal scrollbar for wide data tables. */
+    /* Streamlit's main content area and all inner
+       scrollable wrappers — the REAL scroll container */
+    section[data-testid="stMain"],
+    section[data-testid="stMain"] > div,
     [data-testid="stAppViewBlockContainer"],
     [data-testid="stVerticalBlock"],
-    .element-container,
-    section[data-testid="stMain"] > div {
-        overflow: visible !important;
-    }
-
-    /* Data frames / editors keep horizontal scroll only */
-    [data-testid="stDataFrame"],
-    [data-testid="stDataEditor"],
-    .stDataFrame {
-        overflow-x: auto !important;
-        overflow-y: visible !important;
-        scrollbar-gutter: stable !important;
-    }
-
-    /* Firefox scrollbar styling */
-    * {
+    .main .block-container,
+    [data-testid="stSidebar"] > div {
         scrollbar-width: auto !important;
         scrollbar-color: #8B4513 #f0f0f0 !important;
+    }
+
+    section[data-testid="stMain"] ::-webkit-scrollbar,
+    [data-testid="stSidebar"] ::-webkit-scrollbar {
+        width: 14px !important;
+        height: 14px !important;
+    }
+    section[data-testid="stMain"] ::-webkit-scrollbar-track,
+    [data-testid="stSidebar"] ::-webkit-scrollbar-track {
+        background: #f0f0f0 !important;
+        border-radius: 7px !important;
+    }
+    section[data-testid="stMain"] ::-webkit-scrollbar-thumb,
+    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
+        background-color: #8B4513 !important;
+        border-radius: 7px !important;
+        border: 2px solid #f0f0f0 !important;
+    }
+    section[data-testid="stMain"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover {
+        background-color: #654321 !important;
+    }
+
+    /* Data frames / editors — style both axes */
+    [data-testid="stDataFrame"] ::-webkit-scrollbar,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar {
+        width: 14px !important;
+        height: 14px !important;
+    }
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb {
+        background-color: #8B4513 !important;
+        border-radius: 7px !important;
+        border: 2px solid #f0f0f0 !important;
     }
 
     </style>

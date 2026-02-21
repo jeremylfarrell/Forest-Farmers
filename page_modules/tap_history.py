@@ -87,7 +87,8 @@ def load_historical_taps():
 
 def get_2026_taps(personnel_df):
     """
-    Extract 2026 taps per mainline from live personnel data.
+    Extract current season taps per mainline from live personnel data.
+    Includes December 2025 onward (season start) through current date.
     Returns a Series indexed by mainline name with total taps put in.
     """
     if personnel_df is None or personnel_df.empty:
@@ -103,6 +104,13 @@ def get_2026_taps(personnel_df):
     df['_taps'] = pd.to_numeric(df[taps_col], errors='coerce').fillna(0)
     df['_ml'] = df[mainline_col].astype(str).str.strip()
 
+    # Include December 2025 onward (tapping season starts in December)
+    date_col = find_column(df, 'Date', 'date', 'timestamp')
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        season_start = pd.Timestamp('2025-12-01')
+        df = df[df[date_col] >= season_start]
+
     # Filter to rows with actual mainline entries and taps
     df = df[df['_ml'].str.len() > 0]
     df = df[df['_ml'] != 'nan']
@@ -114,6 +122,7 @@ def get_2026_taps(personnel_df):
 def get_2026_tappers(personnel_df):
     """
     Extract unique employee names per mainline from live personnel data.
+    Includes December 2025 onward (season start).
     Returns a Series indexed by mainline name with comma-separated employee names.
     """
     if personnel_df is None or personnel_df.empty:
@@ -130,6 +139,13 @@ def get_2026_tappers(personnel_df):
     df['_taps'] = pd.to_numeric(df[taps_col], errors='coerce').fillna(0)
     df['_ml'] = df[mainline_col].astype(str).str.strip()
     df['_emp'] = df[emp_col].astype(str).str.strip()
+
+    # Include December 2025 onward (tapping season starts in December)
+    date_col = find_column(df, 'Date', 'date', 'timestamp')
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        season_start = pd.Timestamp('2025-12-01')
+        df = df[df[date_col] >= season_start]
 
     # Filter to rows with actual taps > 0
     df = df[df['_ml'].str.len() > 0]
