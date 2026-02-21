@@ -17,8 +17,8 @@ def render(personnel_df, vacuum_df=None):
 
     st.title("📋 Manager Data Review")
     st.markdown(
-        "*Review raw TSheets data, correct any mistakes, and approve it. "
-        "Approved data replaces the raw data across all dashboard pages.*"
+        "*Review raw TSheets data, correct any mistakes, and approve corrections. "
+        "Manager corrections override the raw TSheets data across all dashboard pages.*"
     )
 
     if personnel_df is None or personnel_df.empty:
@@ -375,83 +375,6 @@ def render(personnel_df, vacuum_df=None):
                 st.rerun()
 
     # ------------------------------------------------------------------
-    # EXCEL UPLOAD — Replace / Fix Personnel Data
-    # ------------------------------------------------------------------
-    if manager_edit_authorized:
-        st.divider()
-        st.subheader("📤 Upload Corrected Excel Data")
-        st.markdown(
-            "*Upload a corrected Excel file to replace the approved personnel data. "
-            "The file should have the same column headers as the data above. "
-            "This is useful for fixing historical data or bulk corrections.*"
-        )
-
-        uploaded = st.file_uploader(
-            "Upload Excel (.xlsx) or CSV (.csv)",
-            type=["xlsx", "csv"],
-            key="mgr_upload_file"
-        )
-
-        if uploaded is not None:
-            try:
-                if uploaded.name.endswith('.csv'):
-                    upload_df = pd.read_csv(uploaded)
-                else:
-                    upload_df = pd.read_excel(uploaded)
-
-                st.success(f"Loaded {len(upload_df)} rows from **{uploaded.name}**")
-                st.dataframe(upload_df.head(10), use_container_width=True, hide_index=True)
-
-                if st.button("✅ Replace Approved Data with This File", type="primary",
-                             key="upload_replace_btn"):
-                    # Process the uploaded data and save as approved
-                    save_df = upload_df.copy()
-
-                    # Convert Date column
-                    if 'Date' in save_df.columns:
-                        save_df['Date'] = pd.to_datetime(save_df['Date'], errors='coerce')
-
-                    # Add approval metadata
-                    save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-                    save_df['Approved By'] = 'Manager (Excel Upload)'
-
-                    if 'Approval Status' in save_df.columns:
-                        save_df = save_df.drop(columns=['Approval Status'])
-
-                    # Get sheet URL
-                    sheet_url = None
-                    credentials_file = 'credentials.json'
-                    try:
-                        if hasattr(st, 'secrets') and 'sheets' in st.secrets:
-                            sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
-                    except (KeyError, FileNotFoundError):
-                        pass
-                    if not sheet_url:
-                        try:
-                            import os as _os
-                            from dotenv import load_dotenv
-                            load_dotenv()
-                            sheet_url = _os.getenv('PERSONNEL_SHEET_URL')
-                        except ImportError:
-                            pass
-
-                    if sheet_url:
-                        with st.spinner("Uploading corrected data..."):
-                            success, message = save_approved_personnel(
-                                sheet_url, credentials_file, save_df
-                            )
-                        if success:
-                            st.success(f"✅ {message}")
-                            st.balloons()
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {message}")
-                    else:
-                        st.error("Could not find sheet URL in configuration.")
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
-
-    # ------------------------------------------------------------------
     # HELP
     # ------------------------------------------------------------------
     with st.expander("ℹ️ How to use Manager Data Review"):
@@ -467,18 +390,13 @@ def render(personnel_df, vacuum_df=None):
         **What happens when you approve:**
         - All rows currently shown in the editor are saved to the
           `approved_personnel` tab in Google Sheets
-        - Approved data automatically overrides the raw TSheets data
-          for all dashboard pages (Tapping Operations, Employee Performance, etc.)
-        - **IMPORTANT:** Other pages (Tapping, Repairs, etc.) will ONLY show
-          data that has been approved here. Pending data stays hidden until approved.
-        - If you re-approve the same row (same Employee + Date + Job),
-          it updates the existing entry — no duplicates
-
-        **Excel Upload:**
-        - If you need to fix historical data in bulk, use the Excel upload
-          feature at the bottom of this page (requires manager password)
-        - Upload a corrected .xlsx or .csv file to replace the approved data
-        - The file should have the same column headers as the table above
+        - For any row where the manager has made corrections (same
+          Employee + Date + Job key), the corrected version is used
+          across all dashboard pages
+        - All data is always visible on all pages — approval is for
+          corrections only, not a gate
+        - If you re-approve the same row, it updates the existing
+          entry — no duplicates
 
         **Status column:**
         - **Pending** — raw TSheets data, not yet reviewed

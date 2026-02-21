@@ -525,16 +525,22 @@ def merge_approved_data(raw_df, approved_df):
             diffs = (raw_vals != appr_vals).any(axis=1)
             tsheets_updated_keys = set(diffs[diffs].index)
 
+    raw_keys = set(raw['_merge_key'].values)
+
     # Raw rows NOT overridden by approved data
     pending_rows = raw[~raw['_merge_key'].isin(approved_keys)].copy()
     pending_rows['Approval Status'] = 'Pending'
 
-    # Approved rows — mark those with TSheets changes
+    # Approved rows — only keep those whose key exists in raw data
+    # (i.e., approved data is CORRECTIONS, not additions)
+    approved = approved[approved['_merge_key'].isin(raw_keys)].copy()
+
+    # Mark those with TSheets changes
     approved['Approval Status'] = approved['_merge_key'].apply(
         lambda k: 'TSheets Updated' if k in tsheets_updated_keys else 'Approved'
     )
 
-    # Combine: pending raw rows + approved rows
+    # Combine: pending raw rows + approved correction rows
     merged = pd.concat([pending_rows, approved], ignore_index=True)
     merged = merged.drop(columns=['_merge_key'], errors='ignore')
 

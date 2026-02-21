@@ -338,7 +338,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.5 Approval Gate | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.6 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -388,31 +388,18 @@ def load_data(days_to_load):
             personnel_df = load_all_personnel_data(personnel_url, credentials)
             repairs_df = load_repairs_tracker(personnel_url, credentials)
 
-            # Merge manager-approved overrides into personnel data
+            # Merge manager-approved overrides into personnel data.
+            # Where the manager has corrected a row (same Employee+Date+Job),
+            # use the corrected version.  All data is shown on all pages.
             approved_df = load_approved_personnel(personnel_url, credentials)
-            personnel_all = merge_approved_data(personnel_df, approved_df)
-
-            # APPROVAL-GATED DATA FLOW:
-            # Other pages only see rows the manager has approved.
-            # Manager Data Review sees everything (all + pending).
-            if 'Approval Status' in personnel_all.columns:
-                personnel_approved = personnel_all[
-                    personnel_all['Approval Status'] == 'Approved'
-                ].copy()
-            else:
-                personnel_approved = personnel_all.copy()
-
-            # If NO data has been approved yet, fall back to showing
-            # all data so the dashboard is not empty on first use.
-            if personnel_approved.empty:
-                personnel_approved = personnel_all.copy()
+            personnel_df = merge_approved_data(personnel_df, approved_df)
 
         except Exception as e:
             st.error(f"Error loading data: {str(e)}")
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
             st.stop()
 
-    return vacuum_df, personnel_approved, personnel_all, repairs_df
+    return vacuum_df, personnel_df, repairs_df
 
 
 def show_data_info(vacuum_df, personnel_df):
@@ -489,19 +476,14 @@ def main():
     # Render sidebar and get selections
     page, days_to_load, site_filter = render_sidebar()
 
-    # Load data — personnel_df is approved-only; personnel_all is everything
-    vacuum_df, personnel_df, personnel_all, repairs_df = load_data(days_to_load)
+    # Load data — personnel_df is the full merged dataset (raw + any approved corrections)
+    vacuum_df, personnel_df, repairs_df = load_data(days_to_load)
 
     # Show data loading info
     show_data_info(vacuum_df, personnel_df)
 
     # Filter by site (based on login selection)
     vacuum_df, personnel_df, repairs_df = filter_data_by_site(vacuum_df, personnel_df, repairs_df, site_filter)
-    # Also filter the full personnel set for Manager Data Review
-    if site_filter != "All Sites" and 'Site' in personnel_all.columns:
-        personnel_all_filtered = personnel_all[personnel_all['Site'] == site_filter].copy()
-    else:
-        personnel_all_filtered = personnel_all
 
     # Show filtering info at top of page
     if site_filter == "NY":
@@ -546,7 +528,7 @@ def main():
     elif page == "🧊 Freezing Report":
         freezing_report.render(vacuum_df, personnel_df)
     elif page == "📋 Manager Data Review":
-        manager_review.render(personnel_all_filtered, vacuum_df)
+        manager_review.render(personnel_df, vacuum_df)
 
 
 if __name__ == "__main__":
