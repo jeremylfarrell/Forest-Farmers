@@ -758,10 +758,13 @@ def _render_freezing_report(vacuum_df):
     vdf[vacuum_col] = pd.to_numeric(vdf[vacuum_col], errors='coerce')
     vdf[releaser_col] = pd.to_numeric(vdf[releaser_col], errors='coerce')
 
-    # Filter to valid maple sensors (2-4 uppercase letters + number)
+    # Filter to valid maple sensors (2+ uppercase letters + number)
     import re
-    valid_sensor = r'^[A-Z]{2,4}\d'
+    valid_sensor = r'^[A-Z]{2,6}\d'
     vdf = vdf[vdf[sensor_col].str.match(valid_sensor, na=False)]
+
+    # Exclude non-maple sensors (birch, relays, typos)
+    vdf = vdf[~vdf[sensor_col].apply(config.is_excluded_sensor)]
 
     if vdf.empty:
         st.warning("No valid sensor data for freezing report.")
@@ -891,10 +894,12 @@ def _render_sensor_drilldown(vacuum_df):
         st.warning("Missing required columns for sensor drill-down.")
         return
 
-    # Filter to valid sensors
+    # Filter to valid sensors, excluding non-maple
     import re
-    valid_sensor = r'^[A-Z]{2,4}\d'
-    sensors = sorted(vacuum_df[vacuum_df[sensor_col].str.match(valid_sensor, na=False)][sensor_col].unique())
+    valid_sensor = r'^[A-Z]{2,6}\d'
+    mask = (vacuum_df[sensor_col].str.match(valid_sensor, na=False) &
+            ~vacuum_df[sensor_col].apply(config.is_excluded_sensor))
+    sensors = sorted(vacuum_df[mask][sensor_col].unique())
 
     if not sensors:
         st.info("No valid sensors found.")
@@ -951,15 +956,15 @@ def _render_sensor_drilldown(vacuum_df):
                 secondary_y=False,
             )
 
-            # Releaser differential (secondary y-axis)
+            # Releaser differential (secondary y-axis) — solid, darker, circles
             if releaser_col and releaser_col in data.columns:
                 fig.add_trace(
                     go.Scatter(
                         x=data[timestamp_col], y=data[releaser_col],
                         mode='lines+markers',
                         name='Releaser Diff',
-                        line=dict(color='#ff7f0e', width=1, dash='dot'),
-                        marker=dict(color='#ff7f0e', size=5),
+                        line=dict(color='#C43E00', width=2),
+                        marker=dict(color='#C43E00', size=6, symbol='circle'),
                         hovertemplate='Rel Diff: %{y:.1f}"<br>%{x}<extra></extra>',
                     ),
                     secondary_y=True,
@@ -970,6 +975,7 @@ def _render_sensor_drilldown(vacuum_df):
                 height=400,
                 hovermode='x unified',
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                font=dict(size=13),
             )
             fig.update_yaxes(title_text="Vacuum (inches)", secondary_y=False)
             fig.update_yaxes(title_text="Releaser Diff (inches)", secondary_y=True)

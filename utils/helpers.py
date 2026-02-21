@@ -237,11 +237,37 @@ def show_empty_data_message(data_type="data"):
 def extract_conductor_system(mainline):
     """
     Extract the conductor system prefix from a mainline name.
-    The conductor system is the 2-4 letter abbreviation that precedes the number.
-    E.g., 'RHAS13' -> 'RHAS', 'AB5' -> 'AB', 'MPC12' -> 'MPC'
+
+    The conductor system is the letter prefix before the first digit.
+    After extracting it, we try to match it against the known sugarbush
+    conductor list (from config) to normalise sub-conductors into their
+    parent.  E.g. GCE → GC, DMAN → DMA (closest match by prefix).
     """
     import re
+    import config as _cfg
+
     if pd.isna(mainline) or not str(mainline).strip():
         return 'Unknown'
-    m = re.match(r'^([A-Za-z]{1,4})', str(mainline).strip())
-    return m.group(1).upper() if m else 'Unknown'
+
+    name = str(mainline).strip().upper()
+
+    # Extract all letters before the first digit
+    m = re.match(r'^([A-Z]{1,6})', name)
+    if not m:
+        return 'Unknown'
+
+    raw_prefix = m.group(1)
+
+    # Try to match against known conductor prefixes (longest match first)
+    known = set()
+    for bush_conductors in _cfg.SUGARBUSH_MAP.values():
+        known.update(bush_conductors)
+
+    # Sort known conductors longest-first so DMA matches before DM, GC before G
+    for known_cond in sorted(known, key=len, reverse=True):
+        if raw_prefix.startswith(known_cond):
+            return known_cond
+
+    # Fallback: letters before first digit (original behaviour)
+    m2 = re.match(r'^([A-Z]{1,4})', name)
+    return m2.group(1) if m2 else 'Unknown'

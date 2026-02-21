@@ -57,9 +57,12 @@ def render(vacuum_df, personnel_df):
     if releaser_col:
         vdf[releaser_col] = pd.to_numeric(vdf[releaser_col], errors='coerce')
 
-    # Filter to valid maple sensors (2-4 uppercase letters + number)
-    valid_pattern = r'^[A-Z]{2,4}\d'
+    # Filter to valid maple sensors (2+ uppercase letters + number)
+    valid_pattern = r'^[A-Z]{2,6}\d'
     vdf = vdf[vdf[sensor_col].str.match(valid_pattern, na=False)]
+
+    # Exclude non-maple sensors (birch, relays, typos)
+    vdf = vdf[~vdf[sensor_col].apply(config.is_excluded_sensor)]
 
     if vdf.empty:
         st.warning("No valid sensor data found.")
@@ -132,6 +135,9 @@ def render(vacuum_df, personnel_df):
         lambda s: taps_per_sensor.get(str(s).strip().upper(), 0)
     )
 
+    # Add Sugarbush
+    latest['Sugarbush'] = latest['Conductor'].apply(config.get_sugarbush)
+
     # ── Summary metrics ─────────────────────────────────────────────
     frozen_count = len(latest[latest['Freeze_Status'] == 'FROZEN'])
     critical_count = len(latest[latest['Freeze_Status'] == 'Critical'])
@@ -157,18 +163,34 @@ def render(vacuum_df, personnel_df):
         st.info("No conductor systems found.")
         return
 
-    # Let manager select which conductor to view or "All"
+    # Build selector with sugarbush grouping
+    conductor_options = ["Overview (All)"]
+    for bush_name, bush_conds in config.SUGARBUSH_MAP.items():
+        matching = [c for c in conductors if c in bush_conds]
+        if matching:
+            for c in sorted(matching):
+                conductor_options.append(f"{bush_name} — {c}")
+    # Add any conductors not in sugarbush map
+    mapped = set()
+    for bush_conds in config.SUGARBUSH_MAP.values():
+        mapped.update(bush_conds)
+    for c in conductors:
+        if c not in mapped:
+            conductor_options.append(f"Other — {c}")
+
     selected = st.selectbox(
         "Conductor System",
-        ["Overview (All)"] + conductors,
+        conductor_options,
         key="freeze_report_conductor_select"
     )
 
     if selected == "Overview (All)":
         _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, timestamp_col, vdf)
     else:
+        # Parse "Sugarbush — Conductor" format
+        conductor_name = selected.split(" — ")[-1].strip()
         _render_conductor_report(
-            selected, latest, sensor_col, vacuum_col, releaser_col,
+            conductor_name, latest, sensor_col, vacuum_col, releaser_col,
             timestamp_col, vdf, personnel_df
         )
 
@@ -186,7 +208,9 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
         critical = len(cdf[cdf['Freeze_Status'] == 'Critical'])
         total = len(cdf)
         total_taps = cdf['Taps'].sum()
+        sugarbush = config.get_sugarbush(cond)
         rows.append({
+            'Sugarbush': sugarbush,
             'Conductor': cond,
             'Total Lines': total,
             'Frozen': frozen,
@@ -196,7 +220,7 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
         })
 
     overview_df = pd.DataFrame(rows)
-    overview_df = overview_df.sort_values('Priority Lines', ascending=False)
+    overview_df = overview_df.sort_values(['Sugarbush', 'Priority Lines'], ascending=[True, False])
 
     # Highlight rows with frozen/critical
     def _highlight_row(row):
@@ -232,8 +256,10 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
     cdf['_sort'] = cdf['Freeze_Status'].map(status_order).fillna(9)
     cdf = cdf.sort_values(['_sort', 'Freeze_Rank'], ascending=[True, True])
 
-    # Priority table
-    priority_lines = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical', 'Elevated'])].copy()
+    # Priority table — only lines where vacuum is near-zero (FROZEN) or
+    # the releaser differential is critically high (>10").
+    # Exclude sensors that have healthy vacuum but happen to have a moderate diff.
+    priority_lines = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical'])].copy()
 
     if not priority_lines.empty:
         st.markdown("### Priority Lines")
@@ -259,7 +285,7 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
         st.success(f"No priority lines in {conductor} — all sensors healthy.")
 
     # ── 24-hour vacuum charts for pink/red lines ────────────────────
-    chart_sensors = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical', 'Elevated'])]
+    chart_sensors = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical'])]
     if not chart_sensors.empty:
         st.markdown("### Vacuum History — Priority Lines")
 
@@ -309,7 +335,8 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                             mode='lines+markers',
                             name='Vacuum',
                             line=dict(color='#1f77b4', width=2),
-                            marker=dict(color=dot_colors, size=7),
+                            marker=dict(color=dot_colors, size=8,
+                                        line=dict(width=1, color='white')),
                         ),
                         secondary_y=False,
                     )
@@ -318,19 +345,73 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                         fig.add_trace(
                             go.Scatter(
                                 x=data[timestamp_col], y=data[releaser_col],
-                                mode='lines',
+                                mode='lines+markers',
                                 name='Releaser Diff',
-                                line=dict(color='#ff7f0e', width=1, dash='dot'),
+                                line=dict(color='#C43E00', width=2),
+                                marker=dict(color='#C43E00', size=6,
+                                            symbol='circle'),
                             ),
                             secondary_y=True,
                         )
 
+                    # Add temperature overlay
+                    try:
+                        import requests as _req
+                        _temp_url = "https://api.open-meteo.com/v1/forecast"
+                        _days = 2 if label == "24H" else 8
+                        _params = {
+                            "latitude": 43.4267, "longitude": -73.7123,
+                            "hourly": "temperature_2m",
+                            "temperature_unit": "fahrenheit",
+                            "timezone": "America/New_York",
+                            "past_days": _days, "forecast_days": 0
+                        }
+                        _resp = _req.get(_temp_url, params=_params, timeout=3)
+                        if _resp.ok:
+                            _td = _resp.json()['hourly']
+                            _temp_series = pd.DataFrame({
+                                'time': pd.to_datetime(_td['time']),
+                                'temp': _td['temperature_2m']
+                            })
+                            _temp_series = _temp_series[
+                                (_temp_series['time'] >= data[timestamp_col].min()) &
+                                (_temp_series['time'] <= data[timestamp_col].max())
+                            ]
+                            if not _temp_series.empty:
+                                fig.add_trace(
+                                    go.Scatter(
+                                        x=_temp_series['time'],
+                                        y=_temp_series['temp'],
+                                        mode='lines',
+                                        name='Temp (F)',
+                                        line=dict(color='#999999', width=1,
+                                                  dash='dot'),
+                                        yaxis='y3',
+                                        hovertemplate='%{y:.0f}°F<extra></extra>',
+                                    )
+                                )
+                                # Add freezing line
+                                fig.add_hline(
+                                    y=32, line_dash="dash",
+                                    line_color="lightblue", line_width=1,
+                                    annotation_text="32°F",
+                                    annotation_position="bottom right",
+                                    row=1, col=1, secondary_y=False,
+                                )
+                    except Exception:
+                        pass
+
                     fig.update_layout(
-                        height=250, margin=dict(t=30, b=30, l=50, r=50),
-                        showlegend=False,
+                        height=300, margin=dict(t=30, b=30, l=50, r=50),
+                        showlegend=True,
+                        legend=dict(orientation="h", yanchor="bottom",
+                                    y=1.02, xanchor="right", x=1),
+                        font=dict(size=12),
                     )
-                    fig.update_yaxes(title_text="Vacuum", secondary_y=False)
-                    fig.update_yaxes(title_text="Rel Diff", secondary_y=True)
+                    fig.update_yaxes(title_text="Vacuum (in)",
+                                     secondary_y=False)
+                    fig.update_yaxes(title_text="Rel Diff (in)",
+                                     secondary_y=True)
 
                     st.plotly_chart(fig, use_container_width=True)
 
@@ -385,6 +466,25 @@ def _render_pdf_export(conductor, cdf, sensor_col, vacuum_col, releaser_col,
             st.error("Failed to generate PDF. Check that fpdf2 is installed.")
 
 
+def _safe_text(text):
+    """Sanitise text for fpdf2's built-in fonts (latin-1 only).
+    Replaces smart quotes, em-dashes, and other Unicode with ASCII equivalents."""
+    if not isinstance(text, str):
+        text = str(text)
+    replacements = {
+        '\u201c': '"', '\u201d': '"',   # smart double quotes
+        '\u2018': "'", '\u2019': "'",   # smart single quotes
+        '\u2014': '--', '\u2013': '-',  # em/en dash
+        '\u2026': '...',                # ellipsis
+        '\u00b0': 'deg',               # degree sign
+        '\u2033': '"', '\u2032': "'",   # prime / double prime
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # Final safety: encode to latin-1, replacing anything remaining
+    return text.encode('latin-1', 'replace').decode('latin-1')
+
+
 def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
                timestamp_col, vdf):
     """Build a PDF report for a conductor system using fpdf2."""
@@ -400,28 +500,32 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
 
     # Title
     pdf.set_font('Helvetica', 'B', 18)
-    pdf.cell(0, 12, f'Freezing Report: {conductor}', new_x='LMARGIN', new_y='NEXT', align='C')
+    pdf.cell(0, 12, _safe_text(f'Freezing Report: {conductor}'), new_x='LMARGIN', new_y='NEXT', align='C')
     pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}',
+    pdf.cell(0, 6, _safe_text(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")}'),
              new_x='LMARGIN', new_y='NEXT', align='C')
+    sugarbush = config.get_sugarbush(conductor)
+    if sugarbush != 'Other':
+        pdf.cell(0, 6, _safe_text(f'Sugarbush: {sugarbush}'),
+                 new_x='LMARGIN', new_y='NEXT', align='C')
     pdf.ln(6)
 
     # Summary
     frozen = cdf[cdf['Freeze_Status'] == 'FROZEN']
     critical = cdf[cdf['Freeze_Status'] == 'Critical']
     pdf.set_font('Helvetica', 'B', 12)
-    pdf.cell(0, 8, f'Summary: {len(frozen)} FROZEN | {len(critical)} Critical | {len(cdf)} Total Lines',
+    pdf.cell(0, 8, _safe_text(f'Summary: {len(frozen)} FROZEN | {len(critical)} Critical | {len(cdf)} Total Lines'),
              new_x='LMARGIN', new_y='NEXT')
     pdf.ln(4)
 
     # Priority lines table
-    priority = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical', 'Elevated'])].copy()
+    priority = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical'])].copy()
     if not priority.empty:
         # Sort by freeze rank
         priority = priority.sort_values('Freeze_Rank', ascending=True, na_position='last')
 
         pdf.set_font('Helvetica', 'B', 11)
-        pdf.cell(0, 8, 'Priority Lines (Fix First)', new_x='LMARGIN', new_y='NEXT')
+        pdf.cell(0, 8, _safe_text('Priority Lines (Fix First)'), new_x='LMARGIN', new_y='NEXT')
         pdf.ln(2)
 
         # Table header
@@ -429,15 +533,15 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
         col_widths = [12, 30, 25, 25, 20, 20, 35]
         headers = ['#', 'Line', 'Status', 'Vacuum', 'Rel Diff', 'Taps', 'Went to Zero']
         for w, h in zip(col_widths, headers):
-            pdf.cell(w, 7, h, border=1)
+            pdf.cell(w, 7, _safe_text(h), border=1)
         pdf.ln()
 
         # Table rows
         pdf.set_font('Helvetica', '', 8)
         for _, row in priority.iterrows():
             rank_str = str(int(row['Freeze_Rank'])) if pd.notna(row.get('Freeze_Rank')) else '-'
-            vac_str = f'{row[vacuum_col]:.1f}"' if pd.notna(row[vacuum_col]) else 'N/A'
-            rel_str = f'{row[releaser_col]:.1f}"' if releaser_col and pd.notna(row.get(releaser_col)) else 'N/A'
+            vac_str = f'{row[vacuum_col]:.1f} in' if pd.notna(row[vacuum_col]) else 'N/A'
+            rel_str = f'{row[releaser_col]:.1f} in' if releaser_col and pd.notna(row.get(releaser_col)) else 'N/A'
             taps_str = str(int(row['Taps'])) if row['Taps'] > 0 else '-'
             zero_str = ''
             if pd.notna(row.get('First_Zero_Time')):
@@ -446,18 +550,18 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
             vals = [rank_str, str(row[sensor_col]), row['Freeze_Status'],
                     vac_str, rel_str, taps_str, zero_str]
             for w, v in zip(col_widths, vals):
-                pdf.cell(w, 6, v, border=1)
+                pdf.cell(w, 6, _safe_text(v), border=1)
             pdf.ln()
 
         pdf.ln(4)
     else:
         pdf.set_font('Helvetica', '', 10)
-        pdf.cell(0, 8, 'No priority lines — all sensors healthy.',
+        pdf.cell(0, 8, _safe_text('No priority lines -- all sensors healthy.'),
                  new_x='LMARGIN', new_y='NEXT')
 
     # 24-hour vacuum history charts as images
     # Generate small matplotlib charts for each priority sensor
-    chart_sensors = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical', 'Elevated'])]
+    chart_sensors = cdf[cdf['Freeze_Status'].isin(['FROZEN', 'Critical'])]
     if not chart_sensors.empty:
         try:
             import matplotlib
@@ -491,11 +595,12 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
                         continue
 
                     ax.plot(data[timestamp_col], data[vacuum_col],
-                            color='#1f77b4', linewidth=1, marker='.', markersize=3)
+                            color='#1f77b4', linewidth=1.2, marker='o', markersize=3)
                     if releaser_col and releaser_col in data.columns:
                         ax2 = ax.twinx()
                         ax2.plot(data[timestamp_col], data[releaser_col],
-                                 color='#ff7f0e', linewidth=0.8, linestyle='--')
+                                 color='#C43E00', linewidth=1.2, marker='o',
+                                 markersize=2)
                         ax2.set_ylabel('Rel Diff', fontsize=6)
                         ax2.tick_params(labelsize=5)
 
@@ -521,13 +626,13 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
 
         except ImportError:
             pdf.set_font('Helvetica', 'I', 8)
-            pdf.cell(0, 6, '(Charts require matplotlib — install to include charts in PDF)',
+            pdf.cell(0, 6, _safe_text('(Charts require matplotlib -- install to include charts in PDF)'),
                      new_x='LMARGIN', new_y='NEXT')
 
     # All lines summary
     pdf.add_page()
     pdf.set_font('Helvetica', 'B', 11)
-    pdf.cell(0, 8, f'All Lines in {conductor} ({len(cdf)} total)',
+    pdf.cell(0, 8, _safe_text(f'All Lines in {conductor} ({len(cdf)} total)'),
              new_x='LMARGIN', new_y='NEXT')
     pdf.ln(2)
 
@@ -535,17 +640,17 @@ def _build_pdf(conductor, cdf, sensor_col, vacuum_col, releaser_col,
     col_widths_all = [30, 25, 25, 20, 20]
     headers_all = ['Line', 'Status', 'Vacuum', 'Rel Diff', 'Taps']
     for w, h in zip(col_widths_all, headers_all):
-        pdf.cell(w, 7, h, border=1)
+        pdf.cell(w, 7, _safe_text(h), border=1)
     pdf.ln()
 
     pdf.set_font('Helvetica', '', 8)
     for _, row in cdf.sort_values(sensor_col).iterrows():
-        vac_str = f'{row[vacuum_col]:.1f}"' if pd.notna(row[vacuum_col]) else 'N/A'
-        rel_str = f'{row[releaser_col]:.1f}"' if releaser_col and pd.notna(row.get(releaser_col)) else 'N/A'
+        vac_str = f'{row[vacuum_col]:.1f} in' if pd.notna(row[vacuum_col]) else 'N/A'
+        rel_str = f'{row[releaser_col]:.1f} in' if releaser_col and pd.notna(row.get(releaser_col)) else 'N/A'
         taps_str = str(int(row['Taps'])) if row['Taps'] > 0 else '-'
         vals = [str(row[sensor_col]), row['Freeze_Status'], vac_str, rel_str, taps_str]
         for w, v in zip(col_widths_all, vals):
-            pdf.cell(w, 6, v, border=1)
+            pdf.cell(w, 6, _safe_text(v), border=1)
         pdf.ln()
 
     # Return PDF bytes

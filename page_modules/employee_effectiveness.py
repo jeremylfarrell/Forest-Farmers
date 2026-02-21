@@ -398,7 +398,9 @@ def render(personnel_df, vacuum_df):
     # Individual employee detail
     st.subheader("📋 Individual Repair Sessions")
 
-    selected_emp = st.selectbox("Select Employee", employee_stats['Employee'].tolist())
+    # Allow ALL employees — not just the ranked ones
+    all_emp_names = sorted(effectiveness_df['Employee'].unique())
+    selected_emp = st.selectbox("Select Employee", all_emp_names)
 
     if selected_emp:
         emp_sessions = effectiveness_df[effectiveness_df['Employee'] == selected_emp].copy()
@@ -445,8 +447,10 @@ def render(personnel_df, vacuum_df):
 
         st.subheader("Repair History")
 
-        # Display sessions
+        # Display sessions — enriched with cost, taps, job code
         display_sessions = emp_sessions.copy()
+        _ds_dates = display_sessions['Date'].copy()
+        display_sessions['_raw_date'] = _ds_dates
         display_sessions['Date'] = display_sessions['Date'].dt.strftime('%Y-%m-%d')
         display_sessions['Vacuum_Before'] = display_sessions['Vacuum_Before'].apply(lambda x: f"{x:.1f}\"")
         display_sessions['Vacuum_After'] = display_sessions['Vacuum_After'].apply(lambda x: f"{x:.1f}\"")
@@ -454,21 +458,78 @@ def render(personnel_df, vacuum_df):
             lambda x: f"{x:+.1f}\""
         )
 
+        # Look up cost, taps, job code from personnel data
+        _rate_col_ee = find_column(repair_df, 'Rate', 'rate', 'pay rate')
+        _hours_col_ee = find_column(repair_df, 'Hours', 'hours')
+        _taps_col_ee = find_column(repair_df, 'Taps Put In', 'taps put in', 'taps_in')
+        _job_col_ee = find_column(repair_df, 'Job', 'job', 'Job Code', 'jobcode', 'task', 'work')
+        _ml_col_ee = find_column(repair_df, 'mainline.', 'mainline', 'Mainline', 'location')
+        _date_col_ee = find_column(repair_df, 'Date', 'date', 'timestamp')
+
+        cost_vals, taps_vals, cpt_vals, jc_vals = [], [], [], []
+        for _, sess in emp_sessions.iterrows():
+            work_date_str = sess['Date'].strftime('%Y-%m-%d') if hasattr(sess['Date'], 'strftime') else str(sess['Date'])
+            ml = str(sess['Mainline']).strip().upper()
+
+            # Match personnel rows
+            p_mask = pd.Series(True, index=repair_df.index)
+            if emp_col_name:
+                p_mask &= repair_df[emp_col_name].astype(str) == str(selected_emp)
+            if _date_col_ee:
+                p_mask &= pd.to_datetime(repair_df[_date_col_ee], errors='coerce').dt.strftime('%Y-%m-%d') == work_date_str
+            if _ml_col_ee:
+                p_mask &= repair_df[_ml_col_ee].astype(str).str.strip().str.upper() == ml
+            matched_rows = repair_df[p_mask]
+
+            # Cost
+            cost = 0.0
+            if _rate_col_ee and _hours_col_ee and not matched_rows.empty:
+                rate = pd.to_numeric(matched_rows[_rate_col_ee], errors='coerce').fillna(0)
+                hrs = pd.to_numeric(matched_rows[_hours_col_ee], errors='coerce').fillna(0)
+                cost = (rate * hrs).sum()
+            cost_vals.append(round(cost, 2))
+
+            # Taps
+            taps_val = 0
+            if _taps_col_ee and not matched_rows.empty:
+                taps_val = int(pd.to_numeric(matched_rows[_taps_col_ee], errors='coerce').fillna(0).sum())
+            taps_vals.append(taps_val)
+
+            # Cost per tap
+            cpt = cost / taps_val if taps_val > 0 else 0
+            cpt_vals.append(round(cpt, 2))
+
+            # Job code
+            if _job_col_ee and not matched_rows.empty:
+                jc = matched_rows[_job_col_ee].dropna().unique()
+                jc_vals.append(', '.join(str(j) for j in jc[:2]))
+            else:
+                jc_vals.append('')
+
+        display_sessions = display_sessions.reset_index(drop=True)
+        display_sessions['Cost'] = [f"${c:.2f}" if c > 0 else '-' for c in cost_vals]
+        display_sessions['Taps'] = taps_vals
+        display_sessions['Cost/Tap'] = [f"${c:.2f}" if c > 0 else '-' for c in cpt_vals]
+        display_sessions['Job Code'] = jc_vals
+
         cols_to_show = ['Date', 'Mainline', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
         col_labels = ['Date', 'Location', 'Vac Before', 'Vac After', 'Change']
-        
+
         if 'Site' in display_sessions.columns:
-            # Add site emoji to location
             display_sessions['Location_Display'] = display_sessions.apply(
-                lambda row: f"{'🟦' if row['Site'] == 'NY' else '🟩' if row['Site'] == 'VT' else '⚫'} {row['Mainline']}",
+                lambda row: f"{'🟦' if row.get('Site') == 'NY' else '🟩' if row.get('Site') == 'VT' else '⚫'} {row['Mainline']}",
                 axis=1
             )
             cols_to_show = ['Date', 'Location_Display', 'Vacuum_Before', 'Vacuum_After', 'Improvement']
             col_labels = ['Date', 'Location', 'Vac Before', 'Vac After', 'Change']
-        
+
         if 'Hours' in display_sessions.columns:
             cols_to_show.append('Hours')
             col_labels.append('Hours')
+
+        # Add cost / taps / job code columns
+        cols_to_show.extend(['Cost', 'Taps', 'Cost/Tap', 'Job Code'])
+        col_labels.extend(['Cost', 'Taps', 'Cost/Tap', 'Job Code'])
 
         display_sessions = display_sessions[cols_to_show]
         display_sessions.columns = col_labels
@@ -553,10 +614,14 @@ def render(personnel_df, vacuum_df):
     st.divider()
 
     # ========================================================================
-    # RELEASER DIFFERENTIAL REPORT
+    # RELEASER DIFFERENTIAL REPORT  (Slide 10 — impact based on rel diff)
     # ========================================================================
-    st.subheader("📊 Releaser Differential Report")
-    st.markdown("*Releaser differential readings before and after repair sessions*")
+    st.subheader("📊 Releaser Differential Impact")
+    st.markdown(
+        "*Releaser differential change before & after repair work. "
+        "A decrease means the repair improved the line. Also shows "
+        "conductor-wide impact — fixing one line often helps nearby lines.*"
+    )
 
     # Find releaser differential column in vacuum data
     releaser_col = None
@@ -667,7 +732,66 @@ def render(personnel_df, vacuum_df):
 
             if rel_results:
                 rel_df = pd.DataFrame(rel_results)
+
+                # Summary metrics for releaser diff impact
+                avg_change = rel_df['Change'].mean()
+                rm1, rm2, rm3 = st.columns(3)
+                with rm1:
+                    st.metric("Avg Rel Diff Change", f"{avg_change:+.1f}\"",
+                              help="Negative = improvement (diff decreased after repair)")
+                with rm2:
+                    improved = len(rel_df[rel_df['Change'] < 0])
+                    st.metric("Lines Improved", f"{improved}/{len(rel_df)}")
+                with rm3:
+                    total_change = rel_df['Change'].sum()
+                    st.metric("Total Rel Diff Change", f"{total_change:+.1f}\"")
+
                 st.dataframe(rel_df, use_container_width=True, hide_index=True)
+
+                # ── Conductor-wide impact ───────────────────────────────
+                # Fixing one mainline often improves others in the same
+                # conductor system.  Show the conductor-level average
+                # releaser diff before and after repair work days.
+                st.markdown("#### Conductor-Wide Impact")
+                st.caption(
+                    "Average releaser differential across ALL lines in the "
+                    "conductor system on days when any repair was done vs "
+                    "the day before.  This captures the ripple effect."
+                )
+
+                vac['Conductor'] = vac['Mainline'].apply(extract_conductor_system)
+                vac['Date'] = vac['Timestamp'].dt.date
+
+                cond_results = []
+                for _, rr in rel_df.iterrows():
+                    ml = rr['Mainline']
+                    cond = extract_conductor_system(ml)
+                    work_date = pd.to_datetime(rr['Date']).date()
+                    day_before = work_date - timedelta(days=1)
+                    day_after = work_date + timedelta(days=1)
+
+                    cond_vac = vac[vac['Conductor'] == cond]
+                    if cond_vac.empty:
+                        continue
+
+                    before_avg = cond_vac[cond_vac['Date'] == day_before]['Releaser_Diff'].mean()
+                    after_avg = cond_vac[cond_vac['Date'] == day_after]['Releaser_Diff'].mean()
+
+                    if pd.notna(before_avg) and pd.notna(after_avg):
+                        cond_results.append({
+                            'Date': rr['Date'],
+                            'Conductor': cond,
+                            'Repaired Line': ml,
+                            'Cond Avg Before': round(before_avg, 1),
+                            'Cond Avg After': round(after_avg, 1),
+                            'Cond Change': round(after_avg - before_avg, 1),
+                        })
+
+                if cond_results:
+                    cond_df = pd.DataFrame(cond_results)
+                    st.dataframe(cond_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Not enough data to calculate conductor-wide impact.")
             else:
                 st.info("Could not match releaser differential readings to any repair sessions.")
         else:

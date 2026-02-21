@@ -203,6 +203,61 @@ FEATURES = {
 }
 
 # ============================================================================
+# SUGARBUSH & CONDUCTOR SYSTEM MAPPING
+# ============================================================================
+
+# Sensors with these prefixes should be EXCLUDED from analysis
+# (birch lines, relays, typos, or other non-maple sensors)
+EXCLUDED_SENSOR_PREFIXES = {'AB', 'BFB', 'BMMD', 'ZGAS', 'ZGAN', 'GDS'}
+
+# Sugarbush → conductor system mapping
+# Each sugarbush is a named location containing one or more conductor systems.
+# A conductor system is identified by the letter prefix of the sensor name.
+SUGARBUSH_MAP = {
+    'Drew Mt': ['DMA', 'DMB', 'DMC', 'DMD'],        # DM* sensors
+    'Groton':  ['GA', 'GB', 'GC', 'GD'],             # G* sensors (GC includes GCE, GCW)
+    'Devils East': ['DHE'],
+    'Devils West': ['DHW'],
+    'Lords':   ['LHW', 'LHE'],
+    'Matthews': ['M', 'MD'],
+    'Ducharme': ['DU'],
+}
+
+# Reverse lookup: conductor prefix → sugarbush name
+CONDUCTOR_TO_SUGARBUSH = {}
+for _bush, _conductors in SUGARBUSH_MAP.items():
+    for _cond in _conductors:
+        CONDUCTOR_TO_SUGARBUSH[_cond] = _bush
+
+
+def get_sugarbush(conductor_prefix):
+    """
+    Return the sugarbush name for a conductor system prefix.
+    Uses longest-prefix match so 'DMA' matches before 'DM'.
+    Falls back to 'Other' if no match.
+    """
+    if not conductor_prefix:
+        return 'Other'
+    # Try exact match first, then decreasing prefix length
+    for length in range(len(conductor_prefix), 0, -1):
+        prefix = conductor_prefix[:length].upper()
+        if prefix in CONDUCTOR_TO_SUGARBUSH:
+            return CONDUCTOR_TO_SUGARBUSH[prefix]
+    return 'Other'
+
+
+def is_excluded_sensor(sensor_name):
+    """Check if a sensor name starts with an excluded prefix."""
+    if not sensor_name:
+        return True
+    name = str(sensor_name).strip().upper()
+    for prefix in EXCLUDED_SENSOR_PREFIXES:
+        if name.startswith(prefix):
+            return True
+    return False
+
+
+# ============================================================================
 # HELPER FUNCTIONS - Don't modify unless you know what you're doing!
 # ============================================================================
 

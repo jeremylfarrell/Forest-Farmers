@@ -125,11 +125,30 @@ def format_improvement(value):
 def extract_conductor_system(mainline):
     """
     Extract the conductor system prefix from a mainline name.
-    The conductor system is the 2-4 letter abbreviation that precedes the number.
-    E.g., 'RHAS13' -> 'RHAS', 'AB5' -> 'AB', 'MPC12' -> 'MPC'
+    Uses the sugarbush conductor map from config for normalisation.
     """
     import re
+    import config as _cfg
+
     if pd.isna(mainline) or not str(mainline).strip():
         return 'Unknown'
-    m = re.match(r'^([A-Za-z]{1,4})', str(mainline).strip())
-    return m.group(1).upper() if m else 'Unknown'
+
+    name = str(mainline).strip().upper()
+    m = re.match(r'^([A-Z]{1,6})', name)
+    if not m:
+        return 'Unknown'
+
+    raw_prefix = m.group(1)
+
+    # Match against known conductor prefixes (longest match first)
+    known = set()
+    for bush_conductors in _cfg.SUGARBUSH_MAP.values():
+        known.update(bush_conductors)
+
+    for known_cond in sorted(known, key=len, reverse=True):
+        if raw_prefix.startswith(known_cond):
+            return known_cond
+
+    # Fallback: letters before first digit
+    m2 = re.match(r'^([A-Z]{1,4})', name)
+    return m2.group(1) if m2 else 'Unknown'
