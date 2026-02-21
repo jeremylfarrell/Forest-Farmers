@@ -38,7 +38,8 @@ from page_modules import (
     data_quality,
     repairs_analysis,
     tap_history,
-    manager_review
+    manager_review,
+    freezing_report
 )
 
 # ============================================================================
@@ -236,6 +237,7 @@ def render_sidebar():
                 "🛠️ Repairs Needed",
                 "🌍 Interactive Map",
                 "📈 Tap History",
+                "🧊 Freezing Report",
                 "📋 Manager Data Review"
             ],
             label_visibility="collapsed",
@@ -336,7 +338,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.2 Manager Auth | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.3 Freeze Report | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -520,6 +522,8 @@ def main():
         raw_data.render(vacuum_df, personnel_df)
     elif page == "📈 Tap History":
         tap_history.render(personnel_df, vacuum_df)
+    elif page == "🧊 Freezing Report":
+        freezing_report.render(vacuum_df, personnel_df)
     elif page == "📋 Manager Data Review":
         manager_review.render(personnel_df, vacuum_df)
 

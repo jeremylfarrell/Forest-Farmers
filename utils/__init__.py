@@ -15,6 +15,7 @@ from .helpers import (
     show_data_loading_info,
     show_empty_data_message,
     get_vacuum_column,
+    get_releaser_column,
     extract_conductor_system
 )
 
@@ -51,6 +52,7 @@ __all__ = [
     # helpers
     'find_column',
     'get_vacuum_column',
+    'get_releaser_column',
     'filter_recent_sensors',
     'safe_divide',
     'format_hours',

@@ -34,14 +34,31 @@ def find_column(df, *possible_names):
 def get_vacuum_column(df):
     """
     Find the vacuum reading column in dataframe
-    
+
     Args:
         df: DataFrame to search
-        
+
     Returns:
         Column name if found, None otherwise
     """
     return find_column(df, 'Vacuum Reading', 'vacuum', 'reading', 'Vacuum')
+
+
+def get_releaser_column(df):
+    """
+    Find the releaser differential column in dataframe.
+    The CDL export uses various names — search case-insensitively.
+
+    Returns:
+        Column name if found, None otherwise
+    """
+    if df.empty:
+        return None
+    for col in df.columns:
+        cl = col.lower()
+        if 'releaser' in cl or 'differential' in cl or 'rel diff' in cl:
+            return col
+    return None
 
 
 def filter_recent_sensors(vacuum_df, days=2):

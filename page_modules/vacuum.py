@@ -398,6 +398,22 @@ def render(vacuum_df, personnel_df):
     st.divider()
 
     # ============================================================================
+    # FREEZING REPORT — RELEASER DIFFERENTIAL COLOR-CODED DISPLAY
+    # ============================================================================
+
+    _render_freezing_report(vacuum_df)
+
+    st.divider()
+
+    # ============================================================================
+    # PER-MAINLINE SENSOR DRILL-DOWN CHARTS
+    # ============================================================================
+
+    _render_sensor_drilldown(vacuum_df)
+
+    st.divider()
+
+    # ============================================================================
     # SENSOR DETAILS SECTION
     # ============================================================================
 
@@ -699,3 +715,274 @@ def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+# ============================================================================
+# FREEZING REPORT — Releaser Differential Color-Coded Display
+# ============================================================================
+
+def _render_freezing_report(vacuum_df):
+    """Render the freezing report section with graduated releaser differential colors."""
+    import plotly.graph_objects as go
+    from utils import find_column, get_vacuum_column, get_releaser_column, extract_conductor_system
+
+    st.subheader("🧊 Freezing Report — Releaser Differential")
+    st.caption(
+        "Color-coded by releaser differential: "
+        "dark green (<1\") to pink (>10\"). "
+        "Dark red = frozen (vacuum 0 but releaser > 0). "
+        "Gray = pump off (both 0)."
+    )
+
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
+    vacuum_col = get_vacuum_column(vacuum_df)
+    releaser_col = get_releaser_column(vacuum_df)
+    timestamp_col = find_column(
+        vacuum_df, 'Last communication', 'Last Communication',
+        'Timestamp', 'timestamp'
+    )
+
+    if not releaser_col:
+        st.info("No releaser differential column found in vacuum data. "
+                "This report requires CDL sensor data with a releaser differential reading.")
+        return
+
+    if not all([sensor_col, vacuum_col, timestamp_col]):
+        st.warning("Missing required columns for freezing report.")
+        return
+
+    # Get latest reading per sensor
+    vdf = vacuum_df.copy()
+    vdf[timestamp_col] = pd.to_datetime(vdf[timestamp_col], errors='coerce')
+    vdf = vdf.dropna(subset=[timestamp_col])
+    vdf[vacuum_col] = pd.to_numeric(vdf[vacuum_col], errors='coerce')
+    vdf[releaser_col] = pd.to_numeric(vdf[releaser_col], errors='coerce')
+
+    # Filter to valid maple sensors (2-4 uppercase letters + number)
+    import re
+    valid_sensor = r'^[A-Z]{2,4}\d'
+    vdf = vdf[vdf[sensor_col].str.match(valid_sensor, na=False)]
+
+    if vdf.empty:
+        st.warning("No valid sensor data for freezing report.")
+        return
+
+    # Latest reading per sensor
+    latest = vdf.sort_values(timestamp_col, ascending=False).groupby(sensor_col).first().reset_index()
+
+    # Add conductor system grouping
+    latest['Conductor'] = latest[sensor_col].apply(extract_conductor_system)
+
+    # Add color and status using config helper
+    latest['_color'], latest['_label'] = zip(
+        *latest.apply(lambda r: config.get_releaser_diff_color(r[vacuum_col], r[releaser_col]), axis=1)
+    )
+
+    # Summary metrics
+    frozen_count = len(latest[latest['_label'] == 'FROZEN'])
+    off_count = len(latest[latest['_label'] == 'OFF'])
+    critical_count = len(latest[latest['_label'] == 'Critical'])
+    healthy_count = len(latest[latest['_label'].isin(['Excellent', 'Good', 'Acceptable'])])
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    with mc1:
+        st.metric("🔴 FROZEN", frozen_count)
+    with mc2:
+        st.metric("🩷 Critical (>10\")", critical_count)
+    with mc3:
+        st.metric("🟢 Healthy (<3\")", healthy_count)
+    with mc4:
+        st.metric("⚫ Pump Off", off_count)
+
+    # --- Conductor system selector ---
+    conductors = sorted(latest['Conductor'].unique())
+    if len(conductors) > 1:
+        selected_conductor = st.selectbox(
+            "Filter by Conductor System",
+            ["All"] + conductors,
+            key="freeze_report_conductor"
+        )
+        if selected_conductor != "All":
+            latest = latest[latest['Conductor'] == selected_conductor]
+
+    # --- Color-coded table ---
+    # Build a Plotly heatmap-style bar chart showing each sensor's status
+    # Sort: FROZEN first, then by releaser diff descending
+    status_order = {'FROZEN': 0, 'Critical': 1, 'Elevated': 2, 'Moderate': 3,
+                    'Acceptable': 4, 'Good': 5, 'Excellent': 6, 'OFF': 7, 'No Data': 8}
+    latest['_sort'] = latest['_label'].map(status_order).fillna(9)
+    latest = latest.sort_values(['_sort', releaser_col], ascending=[True, False])
+
+    # Create horizontal bar chart (like CDL freezing report)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=latest[sensor_col],
+        x=latest[releaser_col].fillna(0),
+        orientation='h',
+        marker=dict(color=latest['_color']),
+        text=latest['_label'],
+        textposition='auto',
+        hovertemplate=(
+            '<b>%{y}</b><br>'
+            'Releaser Diff: %{x:.1f}"<br>'
+            'Status: %{text}<extra></extra>'
+        ),
+    ))
+
+    fig.update_layout(
+        title="Sensors by Releaser Differential",
+        xaxis_title='Releaser Differential (inches)',
+        yaxis_title='',
+        height=max(300, len(latest) * 22),
+        yaxis=dict(autorange='reversed'),
+        margin=dict(l=120),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Color legend ---
+    legend_cols = st.columns(8)
+    legend_items = [
+        ('#006400', '<1"'), ('#228B22', '1-2"'), ('#90EE90', '2-3"'),
+        ('#DAA520', '3-5"'), ('#FFD700', '5-10"'), ('#FF69B4', '>10"'),
+        ('#8B0000', 'FROZEN'), ('#808080', 'OFF'),
+    ]
+    for col_w, (color, label) in zip(legend_cols, legend_items):
+        with col_w:
+            st.markdown(
+                f"<span style='color:{color}; font-size:20px;'>&#9679;</span> {label}",
+                unsafe_allow_html=True
+            )
+
+    # --- Detailed table ---
+    with st.expander("View Detailed Table"):
+        detail = latest[[sensor_col, 'Conductor', vacuum_col, releaser_col, '_label', timestamp_col]].copy()
+        detail.columns = ['Sensor', 'Conductor', 'Vacuum', 'Releaser Diff', 'Status', 'Last Reading']
+        detail['Vacuum'] = detail['Vacuum'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
+        detail['Releaser Diff'] = detail['Releaser Diff'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
+        detail['Last Reading'] = detail['Last Reading'].apply(
+            lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
+        )
+        st.dataframe(detail, use_container_width=True, hide_index=True, height=400)
+
+
+# ============================================================================
+# PER-MAINLINE SENSOR DRILL-DOWN CHARTS
+# ============================================================================
+
+def _render_sensor_drilldown(vacuum_df):
+    """Render per-mainline time-series charts: Last 24H and Last 7 Days."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    from utils import find_column, get_vacuum_column, get_releaser_column
+
+    st.subheader("🔍 Sensor Detail — Vacuum Over Time")
+    st.caption("Select a sensor to view its vacuum and releaser differential history")
+
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
+    vacuum_col = get_vacuum_column(vacuum_df)
+    releaser_col = get_releaser_column(vacuum_df)
+    timestamp_col = find_column(
+        vacuum_df, 'Last communication', 'Last Communication',
+        'Timestamp', 'timestamp'
+    )
+
+    if not all([sensor_col, vacuum_col, timestamp_col]):
+        st.warning("Missing required columns for sensor drill-down.")
+        return
+
+    # Filter to valid sensors
+    import re
+    valid_sensor = r'^[A-Z]{2,4}\d'
+    sensors = sorted(vacuum_df[vacuum_df[sensor_col].str.match(valid_sensor, na=False)][sensor_col].unique())
+
+    if not sensors:
+        st.info("No valid sensors found.")
+        return
+
+    selected_sensor = st.selectbox("Select Sensor", sensors, key="drilldown_sensor")
+
+    # Filter data for selected sensor
+    sdf = vacuum_df[vacuum_df[sensor_col] == selected_sensor].copy()
+    sdf[timestamp_col] = pd.to_datetime(sdf[timestamp_col], errors='coerce')
+    sdf = sdf.dropna(subset=[timestamp_col]).sort_values(timestamp_col)
+    sdf[vacuum_col] = pd.to_numeric(sdf[vacuum_col], errors='coerce')
+    if releaser_col:
+        sdf[releaser_col] = pd.to_numeric(sdf[releaser_col], errors='coerce')
+
+    if sdf.empty:
+        st.info(f"No data for {selected_sensor}")
+        return
+
+    # Split into Last 24H and Last 7 Days
+    now = sdf[timestamp_col].max()
+    last_24h = sdf[sdf[timestamp_col] >= now - pd.Timedelta(hours=24)]
+    last_7d = sdf[sdf[timestamp_col] >= now - pd.Timedelta(days=7)]
+
+    # Render two side-by-side charts
+    tab1, tab2 = st.tabs(["Last 24 Hours", "Last 7 Days"])
+
+    for tab, data, title in [(tab1, last_24h, "Last 24 Hours"), (tab2, last_7d, "Last 7 Days")]:
+        with tab:
+            if data.empty:
+                st.info(f"No data for {title}")
+                continue
+
+            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+            # Color vacuum dots by releaser differential
+            if releaser_col and releaser_col in data.columns:
+                colors = data.apply(
+                    lambda r: config.get_releaser_diff_color(r[vacuum_col], r[releaser_col])[0], axis=1
+                )
+            else:
+                colors = '#1f77b4'
+
+            # Vacuum reading (primary y-axis)
+            fig.add_trace(
+                go.Scatter(
+                    x=data[timestamp_col], y=data[vacuum_col],
+                    mode='lines+markers',
+                    name='Vacuum',
+                    line=dict(color='#1f77b4', width=2),
+                    marker=dict(color=colors, size=8, line=dict(width=1, color='white')),
+                    hovertemplate='Vacuum: %{y:.1f}"<br>%{x}<extra></extra>',
+                ),
+                secondary_y=False,
+            )
+
+            # Releaser differential (secondary y-axis)
+            if releaser_col and releaser_col in data.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=data[timestamp_col], y=data[releaser_col],
+                        mode='lines+markers',
+                        name='Releaser Diff',
+                        line=dict(color='#ff7f0e', width=1, dash='dot'),
+                        marker=dict(color='#ff7f0e', size=5),
+                        hovertemplate='Rel Diff: %{y:.1f}"<br>%{x}<extra></extra>',
+                    ),
+                    secondary_y=True,
+                )
+
+            fig.update_layout(
+                title=f"{selected_sensor} — {title}",
+                height=400,
+                hovermode='x unified',
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            )
+            fig.update_yaxes(title_text="Vacuum (inches)", secondary_y=False)
+            fig.update_yaxes(title_text="Releaser Diff (inches)", secondary_y=True)
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Quick stats
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            with sc1:
+                st.metric("Avg Vacuum", f"{data[vacuum_col].mean():.1f}\"")
+            with sc2:
+                st.metric("Min Vacuum", f"{data[vacuum_col].min():.1f}\"")
+            with sc3:
+                st.metric("Max Vacuum", f"{data[vacuum_col].max():.1f}\"")
+            with sc4:
+                st.metric("Readings", len(data))

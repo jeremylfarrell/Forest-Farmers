@@ -166,6 +166,19 @@ FREEZE_DROP_THRESHOLD = 2.0        # Vacuum drop (inches) during freeze to flag 
 FREEZE_DROP_RATE_LIKELY = 0.50     # Drop rate > 50% = "LIKELY LEAK"
 FREEZE_DROP_RATE_WATCH = 0.25      # Drop rate > 25% = "WATCH"
 
+# Releaser differential color thresholds (inches)
+# Used for the freezing report — graduated color scale per manager request
+RELEASER_DIFF_THRESHOLDS = [
+    (1.0,  '#006400', 'Excellent'),   # < 1"  — dark green
+    (2.0,  '#228B22', 'Good'),        # 1-2"  — medium green
+    (3.0,  '#90EE90', 'Acceptable'),  # 2-3"  — light green
+    (5.0,  '#DAA520', 'Moderate'),    # 3-5"  — dark yellow
+    (10.0, '#FFD700', 'Elevated'),    # 5-10" — light yellow
+    (99.0, '#FF69B4', 'Critical'),    # > 10" — pink (approaching zero)
+]
+RELEASER_FROZEN_COLOR = '#8B0000'     # Dark red — vacuum=0 but releaser diff > 0 (frozen)
+RELEASER_OFF_COLOR = '#808080'        # Gray — vacuum=0 AND releaser diff=0 (pump off)
+
 # ============================================================================
 # ADVANCED SETTINGS - For developers
 # ============================================================================
@@ -219,3 +232,36 @@ def get_vacuum_emoji(vacuum_value):
         return "🟡"
     else:
         return "🔴"
+
+
+def get_releaser_diff_color(vacuum, releaser_diff):
+    """
+    Return (hex_color, label) for a sensor based on vacuum and releaser
+    differential, using the graduated color scale.
+
+    Rules:
+    - vacuum=0 AND releaser_diff=0 → gray (pump OFF, not frozen)
+    - vacuum=0 AND releaser_diff > 0 → dark red (FROZEN)
+    - otherwise → graduated green→yellow→pink by releaser_diff value
+    """
+    import math
+    if vacuum is None or releaser_diff is None:
+        return (RELEASER_OFF_COLOR, 'No Data')
+    if (isinstance(vacuum, float) and math.isnan(vacuum)) or \
+       (isinstance(releaser_diff, float) and math.isnan(releaser_diff)):
+        return (RELEASER_OFF_COLOR, 'No Data')
+
+    # Vacuum is zero
+    if vacuum <= 0.01:
+        if releaser_diff <= 0.01:
+            return (RELEASER_OFF_COLOR, 'OFF')
+        else:
+            return (RELEASER_FROZEN_COLOR, 'FROZEN')
+
+    # Graduated scale by releaser differential
+    for threshold, color, label in RELEASER_DIFF_THRESHOLDS:
+        if releaser_diff < threshold:
+            return (color, label)
+
+    # Fallback (should not reach here)
+    return ('#FF69B4', 'Critical')
