@@ -337,80 +337,97 @@ def apply_custom_css():
 
     /* ========================================
        SCROLLBAR STYLING
-       Style ALL scrollbars (including Streamlit's
-       internal iframe) with the maroon maple theme.
+       Force visible, thick brown scrollbars on
+       EVERY scrollable element.  Streamlit nests
+       multiple overflow:auto containers; we use
+       both Firefox (scrollbar-*) and Webkit
+       pseudo-elements with !important to win.
        ======================================== */
 
-    /* Universal scrollbar styling — applies to every
-       scrollable element including Streamlit's inner
-       containers, iframes, data tables, etc. */
-    *, *::before, *::after {
+    /* Firefox — every element */
+    * {
         scrollbar-width: auto !important;
-        scrollbar-color: #8B4513 #f0f0f0 !important;
+        scrollbar-color: #8B4513 #E8DDD0 !important;
     }
 
+    /* Webkit (Chrome/Edge/Safari) — global */
     ::-webkit-scrollbar {
-        width: 14px !important;
-        height: 14px !important;
+        width: 16px !important;
+        height: 16px !important;
+        display: block !important;
     }
     ::-webkit-scrollbar-track {
-        background: #f0f0f0 !important;
-        border-radius: 7px !important;
+        background: #E8DDD0 !important;
     }
     ::-webkit-scrollbar-thumb {
         background-color: #8B4513 !important;
-        border-radius: 7px !important;
-        border: 2px solid #f0f0f0 !important;
-        min-height: 40px !important;
+        border-radius: 8px !important;
+        border: 3px solid #E8DDD0 !important;
+        min-height: 50px !important;
     }
     ::-webkit-scrollbar-thumb:hover {
         background-color: #654321 !important;
     }
+    ::-webkit-scrollbar-corner {
+        background: #E8DDD0 !important;
+    }
 
-    /* Streamlit's main content area and all inner
-       scrollable wrappers — the REAL scroll container */
+    /* Force Streamlit's deep containers to use same style */
     section[data-testid="stMain"],
     section[data-testid="stMain"] > div,
+    section[data-testid="stMain"] > div > div,
     [data-testid="stAppViewBlockContainer"],
     [data-testid="stVerticalBlock"],
+    [data-testid="stSidebar"],
+    [data-testid="stSidebar"] > div,
+    .main,
     .main .block-container,
-    [data-testid="stSidebar"] > div {
+    iframe,
+    [data-testid="stDataFrame"],
+    [data-testid="stDataFrame"] > div,
+    [data-testid="stDataEditor"],
+    [data-testid="stDataEditor"] > div,
+    [data-testid="glideDataEditor"],
+    .dvn-scroller {
         scrollbar-width: auto !important;
-        scrollbar-color: #8B4513 #f0f0f0 !important;
+        scrollbar-color: #8B4513 #E8DDD0 !important;
     }
 
     section[data-testid="stMain"] ::-webkit-scrollbar,
-    [data-testid="stSidebar"] ::-webkit-scrollbar {
-        width: 14px !important;
-        height: 14px !important;
+    [data-testid="stSidebar"] ::-webkit-scrollbar,
+    [data-testid="stDataFrame"] ::-webkit-scrollbar,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar,
+    [data-testid="glideDataEditor"] ::-webkit-scrollbar,
+    .dvn-scroller ::-webkit-scrollbar {
+        width: 16px !important;
+        height: 16px !important;
+        display: block !important;
     }
     section[data-testid="stMain"] ::-webkit-scrollbar-track,
-    [data-testid="stSidebar"] ::-webkit-scrollbar-track {
-        background: #f0f0f0 !important;
-        border-radius: 7px !important;
+    [data-testid="stSidebar"] ::-webkit-scrollbar-track,
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-track,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-track,
+    [data-testid="glideDataEditor"] ::-webkit-scrollbar-track,
+    .dvn-scroller ::-webkit-scrollbar-track {
+        background: #E8DDD0 !important;
     }
     section[data-testid="stMain"] ::-webkit-scrollbar-thumb,
-    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb {
+    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb,
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb,
+    [data-testid="glideDataEditor"] ::-webkit-scrollbar-thumb,
+    .dvn-scroller ::-webkit-scrollbar-thumb {
         background-color: #8B4513 !important;
-        border-radius: 7px !important;
-        border: 2px solid #f0f0f0 !important;
+        border-radius: 8px !important;
+        border: 3px solid #E8DDD0 !important;
     }
     section[data-testid="stMain"] ::-webkit-scrollbar-thumb:hover,
-    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover {
+    [data-testid="stSidebar"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb:hover,
+    [data-testid="glideDataEditor"] ::-webkit-scrollbar-thumb:hover,
+    .dvn-scroller ::-webkit-scrollbar-thumb:hover {
         background-color: #654321 !important;
-    }
-
-    /* Data frames / editors — style both axes */
-    [data-testid="stDataFrame"] ::-webkit-scrollbar,
-    [data-testid="stDataEditor"] ::-webkit-scrollbar {
-        width: 14px !important;
-        height: 14px !important;
-    }
-    [data-testid="stDataFrame"] ::-webkit-scrollbar-thumb,
-    [data-testid="stDataEditor"] ::-webkit-scrollbar-thumb {
-        background-color: #8B4513 !important;
-        border-radius: 7px !important;
-        border: 2px solid #f0f0f0 !important;
     }
 
     </style>

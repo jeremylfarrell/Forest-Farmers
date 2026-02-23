@@ -31,6 +31,11 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
     df = repairs_df.copy()
 
+    # --- Refresh mainline names from latest personnel data ---
+    # If a worker entered the wrong mainline and later corrected it in TSheets
+    # (or the manager approved a correction), update the repair record to match.
+    df = _refresh_mainlines_from_personnel(df, personnel_df)
+
     # Calculate age for open repairs
     if 'Date Found' in df.columns:
         df['Age (Days)'] = (pd.Timestamp.now() - df['Date Found']).dt.days
@@ -425,6 +430,79 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         update the keyword lists in `metrics.py → calculate_repair_cost_breakdown()`
         and `repairs_analysis.py → _auto_complete_repairs()`.
         """)
+
+
+def _refresh_mainlines_from_personnel(repairs_df, personnel_df):
+    """
+    Cross-reference repair mainline names against the latest personnel data.
+    If a worker corrected a mainline name in TSheets (or the manager approved
+    a correction), update the repair record's Mainline to match.
+
+    Matching key: (Found By == Employee Name) AND (Date Found == Date).
+    If personnel data has a different mainline for that employee+date with
+    Repairs needed > 0, use the personnel mainline instead.
+    """
+    from utils import find_column
+
+    if personnel_df is None or personnel_df.empty:
+        return repairs_df
+    if 'Found By' not in repairs_df.columns or 'Date Found' not in repairs_df.columns:
+        return repairs_df
+    if 'Mainline' not in repairs_df.columns:
+        return repairs_df
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    repairs_col = find_column(personnel_df, 'Repairs needed', 'repairs', 'repairs_needed')
+
+    if not all([mainline_col, emp_col, date_col]):
+        return repairs_df
+
+    # Build a lookup: (employee_name, date_str) -> list of mainlines with repairs
+    p = personnel_df.copy()
+    p['_emp'] = p[emp_col].astype(str).str.strip()
+    p['_date'] = pd.to_datetime(p[date_col], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+    p['_ml'] = p[mainline_col].astype(str).str.strip()
+
+    if repairs_col:
+        p['_reps'] = pd.to_numeric(p[repairs_col], errors='coerce').fillna(0)
+        # Only consider rows where the worker logged repairs
+        p = p[p['_reps'] > 0]
+
+    if p.empty:
+        return repairs_df
+
+    # Build lookup: (employee, date) -> set of current mainline names
+    lookup = {}
+    for _, row in p.iterrows():
+        key = (row['_emp'], row['_date'])
+        if key not in lookup:
+            lookup[key] = set()
+        if row['_ml'] and row['_ml'] != 'nan':
+            lookup[key].add(row['_ml'])
+
+    # Update repair mainlines where they differ
+    updated = 0
+    for idx, repair in repairs_df.iterrows():
+        found_by = str(repair.get('Found By', '')).strip()
+        date_found = repair.get('Date Found')
+        old_ml = str(repair.get('Mainline', '')).strip()
+
+        if pd.isna(date_found) or not found_by or not old_ml:
+            continue
+
+        date_str = date_found.strftime('%Y-%m-%d') if hasattr(date_found, 'strftime') else str(date_found)[:10]
+        key = (found_by, date_str)
+
+        if key in lookup:
+            new_mls = lookup[key]
+            # If the old mainline isn't in the current set, the name was corrected
+            if old_ml not in new_mls and len(new_mls) == 1:
+                repairs_df.at[idx, 'Mainline'] = next(iter(new_mls))
+                updated += 1
+
+    return repairs_df
 
 
 def _auto_complete_repairs(repairs_df, personnel_df):

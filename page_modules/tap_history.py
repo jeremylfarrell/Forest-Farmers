@@ -119,6 +119,40 @@ def get_2026_taps(personnel_df):
     return taps_by_ml
 
 
+def get_2026_taps_deleted(personnel_df):
+    """
+    Extract current season taps DELETED per mainline from live personnel data.
+    Includes December 2025 onward (season start) through current date.
+    Returns a Series indexed by mainline name with total taps removed.
+    """
+    if personnel_df is None or personnel_df.empty:
+        return pd.Series(dtype=float)
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    taps_del_col = find_column(personnel_df, 'Taps Removed', 'taps_removed', 'taps out')
+
+    if not mainline_col or not taps_del_col:
+        return pd.Series(dtype=float)
+
+    df = personnel_df.copy()
+    df['_taps_del'] = pd.to_numeric(df[taps_del_col], errors='coerce').fillna(0)
+    df['_ml'] = df[mainline_col].astype(str).str.strip()
+
+    # Include December 2025 onward (tapping season starts in December)
+    date_col = find_column(df, 'Date', 'date', 'timestamp')
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        season_start = pd.Timestamp('2025-12-01')
+        df = df[df[date_col] >= season_start]
+
+    # Filter to rows with actual mainline entries
+    df = df[df['_ml'].str.len() > 0]
+    df = df[df['_ml'] != 'nan']
+
+    taps_del_by_ml = df.groupby('_ml')['_taps_del'].sum()
+    return taps_del_by_ml
+
+
 def get_2026_tappers(personnel_df):
     """
     Extract unique employee names per mainline from live personnel data.
@@ -175,16 +209,20 @@ def render(personnel_df=None, vacuum_df=None):
 
     # Get live 2026 data from personnel sheet
     taps_2026 = get_2026_taps(personnel_df)
+    taps_2026_del = get_2026_taps_deleted(personnel_df)
     tappers_2026 = get_2026_tappers(personnel_df)
     has_2026 = len(taps_2026) > 0
 
     # Merge 2026 taps into historical dataframe
     if has_2026:
         hist_df['2026'] = hist_df['mainline'].map(taps_2026).fillna(0)
+        hist_df['2026 Deleted'] = hist_df['mainline'].map(taps_2026_del).fillna(0)
     else:
         hist_df['2026'] = 0
+        hist_df['2026 Deleted'] = 0
 
     all_years = YEAR_COLS + ['2026'] if has_2026 else YEAR_COLS
+    agg_years = all_years + (['2026 Deleted'] if has_2026 else [])
 
     # ==================================================================
     # SECTION 1: 2026 vs 2025 Season Comparison (THE MAIN EVENT)
@@ -196,31 +234,40 @@ def render(personnel_df=None, vacuum_df=None):
         st.warning("No 2026 tapping data found in personnel records yet. Showing historical data only.")
 
     # Conductor system level comparison
-    cs_agg = hist_df.groupby('Conductor System')[all_years].sum().reset_index()
+    cs_agg = hist_df.groupby('Conductor System')[agg_years].sum().reset_index()
     cs_agg[2025] = cs_agg[2025].fillna(0)
 
     if has_2026:
         cs_agg['2026'] = cs_agg['2026'].fillna(0)
-        cs_agg['Diff (26 vs 25)'] = cs_agg['2026'] - cs_agg[2025]
-        cs_agg['% of 2025'] = ((cs_agg['2026'] / cs_agg[2025]) * 100).round(1)
+        cs_agg['2026 Deleted'] = cs_agg['2026 Deleted'].fillna(0)
+        # Net taps = put in minus deleted
+        cs_agg['Net 2026'] = cs_agg['2026'] - cs_agg['2026 Deleted']
+        cs_agg['Diff (26 vs 25)'] = cs_agg['Net 2026'] - cs_agg[2025]
+        cs_agg['% of 2025'] = ((cs_agg['Net 2026'] / cs_agg[2025]) * 100).round(1)
         cs_agg['% of 2025'] = cs_agg['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
-        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['2026']).clip(lower=0)
+        # Remaining accounts for deletions: need (2025 target - net taps) more
+        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['Net 2026']).clip(lower=0)
         cs_agg = cs_agg.sort_values('% of 2025', ascending=True)  # Worst first
 
         # Top-level metrics
-        col1, col2, col3, col4 = st.columns(4)
         total_2025 = cs_agg[2025].sum()
         total_2026 = cs_agg['2026'].sum()
+        total_2026_del = cs_agg['2026 Deleted'].sum()
+        total_net = cs_agg['Net 2026'].sum()
+
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("2025 Baseline (VT)", f"{int(total_2025):,}")
         with col2:
-            st.metric("2026 Tapped So Far", f"{int(total_2026):,}")
+            st.metric("2026 Tapped", f"{int(total_2026):,}")
         with col3:
-            pct_overall = (total_2026 / total_2025 * 100) if total_2025 > 0 else 0
-            st.metric("% Complete vs 2025", f"{pct_overall:.1f}%")
+            st.metric("2026 Deleted", f"{int(total_2026_del):,}")
         with col4:
-            remaining = max(total_2025 - total_2026, 0)
-            st.metric("Remaining to Match 2025", f"{int(remaining):,}")
+            pct_overall = (total_net / total_2025 * 100) if total_2025 > 0 else 0
+            st.metric("% Complete (Net)", f"{pct_overall:.1f}%")
+        with col5:
+            remaining = max(total_2025 - total_net, 0)
+            st.metric("Remaining to Match", f"{int(remaining):,}")
 
         # Progress bar
         st.progress(min(pct_overall / 100, 1.0))
@@ -229,17 +276,16 @@ def render(personnel_df=None, vacuum_df=None):
 
         # Conductor system comparison table
         st.markdown("**By Conductor System** — sorted by % complete (lowest first = needs attention)")
-        display_cs = cs_agg[['Conductor System', 2025, '2026', 'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
+        display_cs = cs_agg[['Conductor System', 2025, '2026', '2026 Deleted', 'Net 2026',
+                             'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
         display_cs = display_cs.rename(columns={2025: '2025'})
-        display_cs['2025'] = display_cs['2025'].astype(int)
-        display_cs['2026'] = display_cs['2026'].astype(int)
-        display_cs['Diff (26 vs 25)'] = display_cs['Diff (26 vs 25)'].astype(int)
-        display_cs['Remaining'] = display_cs['Remaining'].astype(int)
+        for int_col in ['2025', '2026', '2026 Deleted', 'Net 2026', 'Diff (26 vs 25)', 'Remaining']:
+            display_cs[int_col] = display_cs[int_col].astype(int)
         display_cs['% of 2025'] = display_cs['% of 2025'].apply(lambda x: f"{x:.1f}%")
 
         st.dataframe(display_cs, use_container_width=True, hide_index=True, height=500)
 
-        # Horizontal bar chart: % of 2025 by conductor system
+        # Horizontal bar chart: % of 2025 by conductor system (uses Net 2026)
         chart_data = cs_agg[['Conductor System', '% of 2025']].copy()
         chart_data = chart_data.sort_values('% of 2025', ascending=True)
 
@@ -336,13 +382,15 @@ def render(personnel_df=None, vacuum_df=None):
         # Mainline detail table
         display_cols = ['mainline'] + YEAR_COLS
         if has_2026:
-            display_cols.append('2026')
+            display_cols.extend(['2026', '2026 Deleted'])
 
         ml_display = cs_data[display_cols].copy()
 
         if has_2026:
-            ml_display['Diff (26 vs 25)'] = (ml_display['2026'].fillna(0) - ml_display[2025].fillna(0)).astype(int)
-            ml_display['% of 2025'] = ((ml_display['2026'].fillna(0) / ml_display[2025].fillna(0)) * 100).round(1)
+            ml_display['2026 Deleted'] = ml_display['2026 Deleted'].fillna(0)
+            ml_display['Net 2026'] = ml_display['2026'].fillna(0) - ml_display['2026 Deleted']
+            ml_display['Diff (26 vs 25)'] = (ml_display['Net 2026'] - ml_display[2025].fillna(0)).astype(int)
+            ml_display['% of 2025'] = ((ml_display['Net 2026'] / ml_display[2025].fillna(0)) * 100).round(1)
             ml_display['% of 2025'] = ml_display['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
         else:
             ml_display['Change (24-25)'] = (ml_display[2025].fillna(0) - ml_display[2024].fillna(0)).astype(int)
@@ -351,7 +399,7 @@ def render(personnel_df=None, vacuum_df=None):
         def _flag_mainline(row):
             t2025 = row[2025] if pd.notna(row[2025]) else 0
             if has_2026:
-                t2026 = row.get('2026', 0) if pd.notna(row.get('2026', 0)) else 0
+                t2026 = row.get('Net 2026', 0) if pd.notna(row.get('Net 2026', 0)) else 0
                 return _classify_status(t2025, t2026)
             else:
                 t2024 = row[2024] if pd.notna(row[2024]) else 0
@@ -376,6 +424,8 @@ def render(personnel_df=None, vacuum_df=None):
             ml_display[yr] = ml_display[yr].fillna(0).astype(int)
         if has_2026:
             ml_display['2026'] = ml_display['2026'].fillna(0).astype(int)
+            ml_display['2026 Deleted'] = ml_display['2026 Deleted'].astype(int)
+            ml_display['Net 2026'] = ml_display['Net 2026'].astype(int)
             ml_display['% of 2025'] = ml_display['% of 2025'].apply(lambda x: f"{x:.0f}%")
 
         ml_display = ml_display.rename(columns={'mainline': 'Mainline'})
@@ -384,7 +434,8 @@ def render(personnel_df=None, vacuum_df=None):
         # Reorder columns for clarity
         if has_2026:
             col_order = ['Mainline'] + [yr for yr in YEAR_COLS] + [
-                'Diff (26 vs 25)', '2026', '% of 2025', 'Tappers (2026)', 'Status'
+                '2026', '2026 Deleted', 'Net 2026', 'Diff (26 vs 25)',
+                '% of 2025', 'Tappers (2026)', 'Status'
             ]
             ml_display = ml_display[[c for c in col_order if c in ml_display.columns]]
 
@@ -417,6 +468,8 @@ def render(personnel_df=None, vacuum_df=None):
             cs = row['Conductor System']
             t2025 = row[2025] if pd.notna(row[2025]) else 0
             t2026 = row.get('2026', 0) if pd.notna(row.get('2026', 0)) else 0
+            t2026_del = row.get('2026 Deleted', 0) if pd.notna(row.get('2026 Deleted', 0)) else 0
+            net_2026 = t2026 - t2026_del
 
             # Skip mainlines with no 2025 baseline
             if t2025 <= 0:
@@ -427,16 +480,18 @@ def render(personnel_df=None, vacuum_df=None):
             if cs not in active_conductor_systems:
                 continue
 
-            pct = (t2026 / t2025 * 100) if t2025 > 0 else 0
-            status = _classify_status(t2025, t2026)
+            pct = (net_2026 / t2025 * 100) if t2025 > 0 else 0
+            status = _classify_status(t2025, net_2026)
 
             attention.append({
                 'Mainline': mainline,
                 'Conductor System': cs,
                 '2025 Taps': int(t2025),
                 '2026 Taps': int(t2026),
+                '2026 Deleted': int(t2026_del),
+                'Net 2026': int(net_2026),
                 '% of 2025': f"{pct:.0f}%",
-                'Remaining': int(max(t2025 - t2026, 0)),
+                'Remaining': int(max(t2025 - net_2026, 0)),
                 'Status': status,
             })
 
