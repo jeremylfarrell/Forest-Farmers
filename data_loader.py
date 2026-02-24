@@ -522,13 +522,19 @@ def merge_approved_data(raw_df, approved_df):
 
     tsheets_updated_keys = set()
     if compare_cols:
-        raw_lookup = raw.set_index('_merge_key')[compare_cols]
-        approved_lookup = approved.set_index('_merge_key')[compare_cols]
+        # De-duplicate before comparison — keep first (latest) per key
+        raw_dedup = raw.drop_duplicates(subset='_merge_key', keep='first')
+        appr_dedup = approved.drop_duplicates(subset='_merge_key', keep='first')
+
+        raw_lookup = raw_dedup.set_index('_merge_key')[compare_cols]
+        approved_lookup = appr_dedup.set_index('_merge_key')[compare_cols]
 
         common_keys = raw_lookup.index.intersection(approved_lookup.index)
         if len(common_keys) > 0:
             raw_vals = raw_lookup.loc[common_keys].fillna(0)
             appr_vals = approved_lookup.loc[common_keys].fillna(0)
+            # Align columns to avoid comparison errors
+            appr_vals = appr_vals.reindex(columns=raw_vals.columns, fill_value=0)
             # Flag rows where any numeric field differs
             diffs = (raw_vals != appr_vals).any(axis=1)
             tsheets_updated_keys = set(diffs[diffs].index)
