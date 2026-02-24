@@ -693,10 +693,13 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                 batch = rows_to_append[i:i + ROW_BATCH]
                 approved_ws.append_rows(batch, value_input_option='USER_ENTERED')
 
-        # Clear only the approved personnel cache — not the entire cache.
-        # This avoids re-fetching vacuum data and re-reading the 'all' tab
-        # (which would trigger unnecessary TSheets comparisons).
+        # Clear personnel-related caches so the merge comparison starts
+        # fresh.  Both raw and approved data are re-fetched to ensure the
+        # TSheets Updated detection compares apples-to-apples.  Vacuum
+        # cache is intentionally left alone (no need to re-fetch).
         load_approved_personnel.clear()
+        load_all_personnel_data.clear()
+        process_personnel_data.clear()
 
         total = len(approved_df)
         appended = len(rows_to_append)
