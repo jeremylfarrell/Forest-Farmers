@@ -468,7 +468,7 @@ def load_approved_personnel(sheet_url, credentials_file):
 def merge_approved_data(raw_df, approved_df):
     """
     Merge raw personnel data with manager-approved overrides.
-    For rows where (Employee Name, Date, Job) exists in approved_df,
+    For rows where (Employee Name, Date, Job, mainline) exists in approved_df,
     use the approved version. Otherwise keep the raw version.
     Adds 'Approval Status' column:
       - 'Pending'         — raw data, not yet reviewed
@@ -496,7 +496,11 @@ def merge_approved_data(raw_df, approved_df):
         emp = df['Employee Name'].astype(str)
         date = df['Date'].dt.strftime('%Y-%m-%d').fillna('')
         job = df['Job'].astype(str)
-        return emp + '|' + date + '|' + job
+        # Include mainline so that multiple entries per employee/date/job
+        # (different mainlines) are matched individually.
+        ml_col = next((c for c in df.columns if 'mainline' in c.lower()), None)
+        ml = df[ml_col].astype(str).fillna('') if ml_col else pd.Series('', index=df.index)
+        return emp + '|' + date + '|' + job + '|' + ml
 
     raw = raw_df.copy()
     approved = approved_df.copy()
@@ -586,7 +590,7 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                 approved_ws.update('A1', [approved_columns], value_input_option='USER_ENTERED')
                 existing_data = [approved_columns]
 
-        # Build key map for existing rows: (Employee Name|Date|Job) -> row number
+        # Build key map for existing rows: (Employee Name|Date|Job|mainline) -> row number
         row_map = {}
         if existing_data and len(existing_data) > 1:
             headers = existing_data[0]
@@ -597,10 +601,18 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
             except ValueError:
                 emp_idx = date_idx = job_idx = None
 
+            # Find mainline column index
+            ml_idx = None
+            for hi, h in enumerate(headers):
+                if 'mainline' in h.lower():
+                    ml_idx = hi
+                    break
+
             if all(idx is not None for idx in [emp_idx, date_idx, job_idx]):
                 for i, row in enumerate(existing_data[1:], start=2):
                     if len(row) > max(emp_idx, date_idx, job_idx):
-                        key = f"{row[emp_idx]}|{row[date_idx]}|{row[job_idx]}"
+                        ml_val = row[ml_idx] if ml_idx is not None and ml_idx < len(row) else ''
+                        key = f"{row[emp_idx]}|{row[date_idx]}|{row[job_idx]}|{ml_val}"
                         row_map[key] = i
 
         # Prepare data for writing
@@ -608,7 +620,7 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
         rows_to_append = []
 
         for _, row in approved_df.iterrows():
-            # Build the key
+            # Build the key (must match the key format used in row_map above)
             emp = str(row.get('Employee Name', ''))
             date_val = row.get('Date', '')
             if isinstance(date_val, pd.Timestamp) and not pd.isna(date_val):
@@ -616,7 +628,11 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
             else:
                 date_str = str(date_val) if date_val else ''
             job = str(row.get('Job', ''))
-            key = f"{emp}|{date_str}|{job}"
+            # Include mainline in key
+            ml_val = str(row.get('mainline.', row.get('mainline', '')))
+            if ml_val == 'nan' or ml_val is None:
+                ml_val = ''
+            key = f"{emp}|{date_str}|{job}|{ml_val}"
 
             # Build the row values in column order
             row_values = []
@@ -831,7 +847,9 @@ def process_personnel_data(df):
         df = df.dropna(subset=['Date'])
 
     # Deduplicate: TSheets sync can append updated versions of the same entry.
-    # Key on Employee Name + Date + Job; keep the last occurrence (most recent sync).
+    # Key on Employee Name + Date + Job + mainline + Clock In so that
+    # distinct shifts and distinct mainline entries on the same day are
+    # preserved while true duplicates (re-synced rows) are collapsed.
     dedup_cols = []
     if 'Employee Name' in df.columns:
         dedup_cols.append('Employee Name')
@@ -839,6 +857,15 @@ def process_personnel_data(df):
         dedup_cols.append('Date')
     if 'Job' in df.columns:
         dedup_cols.append('Job')
+    # Include mainline so employees working multiple mainlines per day
+    # under the same Job code are not collapsed into one row.
+    mainline_cols = [c for c in df.columns if 'mainline' in c.lower()]
+    if mainline_cols:
+        dedup_cols.append(mainline_cols[0])
+    # Include Clock In to distinguish morning/afternoon shifts on the
+    # same mainline (rare, but possible).
+    if 'Clock In' in df.columns:
+        dedup_cols.append('Clock In')
     if len(dedup_cols) >= 2:
         before = len(df)
         df = df.drop_duplicates(subset=dedup_cols, keep='last')
