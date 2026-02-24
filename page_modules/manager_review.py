@@ -119,6 +119,15 @@ def render(personnel_df, vacuum_df=None):
     # ------------------------------------------------------------------
     filtered = df.copy()
 
+    # Separate out rows with missing/unparseable dates BEFORE the date filter
+    nat_rows = pd.DataFrame()
+    if 'Date' in filtered.columns:
+        nat_mask = filtered['Date'].isna()
+        if nat_mask.any():
+            nat_rows = filtered[nat_mask].copy()
+            # Remove NaT rows so the date filter doesn't silently drop them
+            filtered = filtered[~nat_mask]
+
     if date_range and 'Date' in filtered.columns:
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start, end = date_range
@@ -128,6 +137,18 @@ def render(personnel_df, vacuum_df=None):
             ]
         elif isinstance(date_range, (list, tuple)) and len(date_range) == 1:
             filtered = filtered[filtered['Date'] == pd.Timestamp(date_range[0])]
+
+    # Offer to include NaT-date rows so they can be viewed and approved
+    if not nat_rows.empty:
+        st.warning(
+            f"**{len(nat_rows)} row(s) have missing or unparseable dates** "
+            "and are not included in the date range filter above."
+        )
+        if st.checkbox(
+            f"Include {len(nat_rows)} rows with missing dates",
+            key="show_nat_rows"
+        ):
+            filtered = pd.concat([filtered, nat_rows], ignore_index=True)
 
     if selected_employees and 'Employee Name' in filtered.columns:
         filtered = filtered[filtered['Employee Name'].isin(selected_employees)]

@@ -498,7 +498,11 @@ def merge_approved_data(raw_df, approved_df):
         job = df['Job'].astype(str)
         # Include mainline so that multiple entries per employee/date/job
         # (different mainlines) are matched individually.
-        ml_col = next((c for c in df.columns if 'mainline' in c.lower()), None)
+        # Prefer 'mainline.' (with period) — matches the approved_personnel
+        # tab column name.  Fall back to any column containing 'mainline'.
+        ml_col = 'mainline.' if 'mainline.' in df.columns else next(
+            (c for c in df.columns if 'mainline' in c.lower()), None
+        )
         ml = df[ml_col].astype(str).fillna('') if ml_col else pd.Series('', index=df.index)
         return emp + '|' + date + '|' + job + '|' + ml
 
