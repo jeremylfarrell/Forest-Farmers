@@ -18,7 +18,11 @@ from datetime import datetime
 import config
 
 # Import data loading
-from data_loader import load_all_vacuum_data, load_all_personnel_data, load_repairs_tracker, load_approved_personnel, merge_approved_data
+from data_loader import (
+    load_all_vacuum_data, load_all_personnel_data, load_repairs_tracker,
+    load_approved_personnel, merge_approved_data,
+    process_vacuum_data, process_personnel_data
+)
 
 # Import utility functions
 from utils import find_column
@@ -282,11 +286,20 @@ def render_sidebar():
 
         st.divider()
 
-        # Actions
-        if st.button("🔄 Refresh Data", use_container_width=True):
-            # Clear all cached data
-            st.cache_data.clear()
-            st.rerun()
+        # Actions — separate refresh buttons for vacuum vs personnel
+        col_ref1, col_ref2 = st.columns(2)
+        with col_ref1:
+            if st.button("🔄 Vacuum", use_container_width=True, help="Refresh vacuum sensor data only"):
+                load_all_vacuum_data.clear()
+                process_vacuum_data.clear()
+                st.rerun()
+        with col_ref2:
+            if st.button("🔄 Personnel", use_container_width=True, help="Refresh personnel/TSheets data only"):
+                load_all_personnel_data.clear()
+                load_approved_personnel.clear()
+                process_personnel_data.clear()
+                load_repairs_tracker.clear()
+                st.rerun()
 
         st.divider()
 
@@ -309,8 +322,10 @@ def render_sidebar():
                         timeout=15,
                     )
                 if resp.status_code == 204:
-                    st.success("Sync triggered! Data will update in ~30 seconds. Click **Refresh Data** after that.")
-                    st.cache_data.clear()
+                    st.success("Sync triggered! Data will update in ~30 seconds. Click **🔄 Personnel** after that.")
+                    load_all_personnel_data.clear()
+                    load_approved_personnel.clear()
+                    process_personnel_data.clear()
                 else:
                     st.error(f"Failed to trigger sync: {resp.status_code} — {resp.text}")
 
@@ -325,20 +340,22 @@ def render_sidebar():
         if current_days <= 3:
             if st.button("📅 Load More Vacuum Data (60 days)", use_container_width=True):
                 st.session_state.vacuum_days = 60
-                st.cache_data.clear()
+                load_all_vacuum_data.clear()
+                process_vacuum_data.clear()
                 st.rerun()
             st.caption("📊 Showing last 3 days of vacuum data")
         else:
             if st.button("⚡ Quick Load (3 days)", use_container_width=True):
                 st.session_state.vacuum_days = 3
-                st.cache_data.clear()
+                load_all_vacuum_data.clear()
+                process_vacuum_data.clear()
                 st.rerun()
             st.caption("📊 Showing last 60 days of vacuum data")
 
         st.divider()
 
         # Footer info
-        st.caption(f"v9.11.1 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.12 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state

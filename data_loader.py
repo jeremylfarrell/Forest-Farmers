@@ -399,8 +399,8 @@ def save_repairs_updates(sheet_url, credentials_file, updated_df):
         if cells_to_update:
             tracker_ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
 
-        # Clear cache so next load picks up changes
-        st.cache_data.clear()
+        # Clear only the repairs cache — not the entire cache
+        load_repairs_tracker.clear()
 
         return True, f"Updated {len(updated_df)} repairs"
 
@@ -693,8 +693,10 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                 batch = rows_to_append[i:i + ROW_BATCH]
                 approved_ws.append_rows(batch, value_input_option='USER_ENTERED')
 
-        # Clear cache so next load picks up changes
-        st.cache_data.clear()
+        # Clear only the approved personnel cache — not the entire cache.
+        # This avoids re-fetching vacuum data and re-reading the 'all' tab
+        # (which would trigger unnecessary TSheets comparisons).
+        load_approved_personnel.clear()
 
         total = len(approved_df)
         appended = len(rows_to_append)
