@@ -58,20 +58,10 @@ def render(personnel_df, vacuum_df=None):
             if pd.isna(max_date):
                 max_date = datetime.now()
 
-            # Smart default: always include at least last 14 days so recent
-            # data is visible regardless of status.  If there is pending data,
-            # extend back to cover the oldest pending row as well.
-            default_start = datetime.now() - timedelta(days=14)
-            if has_pending:
-                pending_mask = df['Approval Status'].isin(['Pending', 'TSheets Updated'])
-                pending_dates = df.loc[pending_mask, 'Date'].dropna()
-                if not pending_dates.empty:
-                    default_start = min(default_start, pending_dates.min())
-
-            # Clamp to available data range
-            default_start = max(min_date, default_start)
-            if default_start > max_date:
-                default_start = min_date
+            # Default: show ALL data so the manager can see and approve
+            # everything at once.  The manager can narrow the range manually
+            # using the date picker if desired.
+            default_start = min_date
 
             date_range = st.date_input(
                 "Date Range",
