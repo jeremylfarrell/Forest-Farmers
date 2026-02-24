@@ -332,37 +332,69 @@ def render(personnel_df, vacuum_df=None):
     )
 
     # ------------------------------------------------------------------
-    # APPROVE BUTTON (with confirmation)
+    # APPROVE BUTTONS
     # ------------------------------------------------------------------
     st.markdown("")  # spacer
+
+    # Warn if editor returned fewer rows than the full set (Streamlit
+    # data_editor rendering limit — typically ~300 rows).
+    editor_count = len(edited_data)
+    full_count = len(edit_df)
+    editor_truncated = editor_count < full_count
+
+    if editor_truncated:
+        st.info(
+            f"📋 The editor shows **{editor_count}** rows but there are "
+            f"**{full_count}** total rows matching your filters. "
+            "Use **Approve ALL Filtered Data** below to approve every row."
+        )
 
     # Two-step approval: first click shows confirmation, second click saves
     if 'confirm_approve' not in st.session_state:
         st.session_state.confirm_approve = False
+    if 'confirm_approve_all' not in st.session_state:
+        st.session_state.confirm_approve_all = False
 
-    col_btn, col_info = st.columns([1, 3])
+    col_btn1, col_btn2, col_info = st.columns([1, 1, 2])
 
-    if not st.session_state.confirm_approve:
-        with col_btn:
+    # --- Button 1: Approve what's in the editor (may be truncated) ---
+    if not st.session_state.confirm_approve and not st.session_state.confirm_approve_all:
+        with col_btn1:
             if st.button(
-                "✅ Approve Selected Data",
-                type="primary",
+                f"✅ Approve Editor ({editor_count})",
                 use_container_width=True,
                 key="approve_btn"
             ):
                 st.session_state.confirm_approve = True
                 st.rerun()
 
+        # --- Button 2: Approve ALL filtered rows (bypasses editor limit) ---
+        with col_btn2:
+            if st.button(
+                f"✅ Approve ALL Filtered ({full_count})",
+                type="primary",
+                use_container_width=True,
+                key="approve_all_btn"
+            ):
+                st.session_state.confirm_approve_all = True
+                st.rerun()
+
         with col_info:
-            st.caption(
-                f"This will save **{len(edited_data)}** rows as manager-approved. "
-                "Approved data will replace the raw TSheets data in all dashboard calculations."
-            )
-    else:
-        # Confirmation step
+            if editor_truncated:
+                st.caption(
+                    f"**Approve Editor** saves only the {editor_count} visible rows. "
+                    f"**Approve ALL** saves all {full_count} rows matching your filters."
+                )
+            else:
+                st.caption(
+                    f"This will save **{full_count}** rows as manager-approved."
+                )
+
+    # --- Confirmation for editor-only approve ---
+    elif st.session_state.confirm_approve:
         st.warning(
-            f"**Are you sure?** This will approve **{len(edited_data)}** rows "
-            "and update the dashboard data."
+            f"**Are you sure?** This will approve **{editor_count}** rows "
+            "(editor contents only) and update the dashboard data."
         )
         col_yes, col_no, col_spacer = st.columns([1, 1, 2])
         with col_yes:
@@ -372,6 +404,22 @@ def render(personnel_df, vacuum_df=None):
         with col_no:
             if st.button("Cancel", use_container_width=True, key="confirm_no"):
                 st.session_state.confirm_approve = False
+                st.rerun()
+
+    # --- Confirmation for FULL approve ---
+    elif st.session_state.confirm_approve_all:
+        st.warning(
+            f"**Are you sure?** This will approve **ALL {full_count}** rows "
+            "matching your current filters and update the dashboard data."
+        )
+        col_yes, col_no, col_spacer = st.columns([1, 1, 2])
+        with col_yes:
+            if st.button("Yes, Approve All", type="primary", use_container_width=True, key="confirm_yes_all"):
+                st.session_state.confirm_approve_all = False
+                _save_approved(edit_df)
+        with col_no:
+            if st.button("Cancel", use_container_width=True, key="confirm_no_all"):
+                st.session_state.confirm_approve_all = False
                 st.rerun()
 
     # ------------------------------------------------------------------

@@ -573,8 +573,10 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
         ]
 
         if approved_ws is None:
+            # Create with enough room for large datasets
+            needed_rows = max(2000, len(approved_df) + 500)
             approved_ws = sheet.add_worksheet(
-                title='approved_personnel', rows=1000, cols=len(approved_columns)
+                title='approved_personnel', rows=needed_rows, cols=len(approved_columns)
             )
             approved_ws.update('A1', [approved_columns], value_input_option='USER_ENTERED')
             existing_data = []
@@ -641,13 +643,29 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
             else:
                 rows_to_append.append(row_values)
 
-        # Execute batch update for existing rows
+        # Execute batch update for existing rows (batch in chunks of 40k cells
+        # to stay within gspread / Google API limits)
         if cells_to_update:
-            approved_ws.update_cells(cells_to_update, value_input_option='USER_ENTERED')
+            CELL_BATCH = 40000
+            for i in range(0, len(cells_to_update), CELL_BATCH):
+                batch = cells_to_update[i:i + CELL_BATCH]
+                approved_ws.update_cells(batch, value_input_option='USER_ENTERED')
 
-        # Append new rows
+        # Append new rows in batches of 500 to avoid API timeouts
         if rows_to_append:
-            approved_ws.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+            ROW_BATCH = 500
+            # Ensure the worksheet has enough rows
+            current_rows = approved_ws.row_count
+            needed_total = current_rows + len(rows_to_append) + 10
+            if needed_total > current_rows:
+                try:
+                    approved_ws.resize(rows=needed_total)
+                except Exception:
+                    pass  # Non-fatal — append_rows may still work
+
+            for i in range(0, len(rows_to_append), ROW_BATCH):
+                batch = rows_to_append[i:i + ROW_BATCH]
+                approved_ws.append_rows(batch, value_input_option='USER_ENTERED')
 
         # Clear cache so next load picks up changes
         st.cache_data.clear()
