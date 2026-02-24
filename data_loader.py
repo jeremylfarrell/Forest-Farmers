@@ -13,6 +13,7 @@ MULTI-SITE: Supports separate vacuum data for NY and VT sites
 """
 
 import pandas as pd
+import numpy as np
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
@@ -531,12 +532,16 @@ def merge_approved_data(raw_df, approved_df):
 
         common_keys = raw_lookup.index.intersection(approved_lookup.index)
         if len(common_keys) > 0:
-            raw_vals = raw_lookup.loc[common_keys].fillna(0)
-            appr_vals = approved_lookup.loc[common_keys].fillna(0)
+            raw_vals = raw_lookup.loc[common_keys].fillna(0).round(2)
+            appr_vals = approved_lookup.loc[common_keys].fillna(0).round(2)
             # Align columns to avoid comparison errors
             appr_vals = appr_vals.reindex(columns=raw_vals.columns, fill_value=0)
-            # Flag rows where any numeric field differs
-            diffs = (raw_vals != appr_vals).any(axis=1)
+            # Flag rows where any numeric field differs by more than 0.01.
+            # Using np.isclose() instead of strict != to handle floating-point
+            # precision differences from the str() → Google Sheets → pd.to_numeric()
+            # round-trip.  Real TSheets changes (hours, taps) are always ≥ 0.25.
+            close = np.isclose(raw_vals.values, appr_vals.values, atol=0.01)
+            diffs = ~pd.Series(close.all(axis=1), index=raw_vals.index)
             tsheets_updated_keys = set(diffs[diffs].index)
 
     raw_keys = set(raw['_merge_key'].values)
