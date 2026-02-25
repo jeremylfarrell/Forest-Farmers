@@ -44,6 +44,19 @@ MIN_HOURS_FOR_RANKING = 5.0
 # Tapping targets by site
 TAP_TARGETS = {"NY": 102000, "VT": 49000}
 
+# Site coordinates for weather lookups
+SITE_COORDINATES = {
+    'NY': {'lat': 44.8939, 'lon': -73.8365, 'name': 'Ellenburg, NY'},
+    'VT': {'lat': 44.3509, 'lon': -72.3540, 'name': 'Marshfield, VT'},
+}
+
+# Temperature ranges for productivity analysis (label, min_temp, max_temp in °F)
+TEMP_RANGES = [
+    ('Below 10°F', None, 10),
+    ('10–20°F', 10, 20),
+    ('Above 20°F', 20, None),
+]
+
 # Overtime threshold (hours per week)
 OVERTIME_THRESHOLD = 52
 
