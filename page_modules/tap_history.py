@@ -278,10 +278,16 @@ def render(personnel_df=None, vacuum_df=None):
         st.markdown("**By Conductor System** — sorted by % complete (lowest first = needs attention)")
         display_cs = cs_agg[['Conductor System', 2025, '2026', '2026 Deleted', 'Net 2026',
                              'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
-        display_cs = display_cs.rename(columns={2025: '2025'})
-        for int_col in ['2025', '2026', '2026 Deleted', 'Net 2026', 'Diff (26 vs 25)', 'Remaining']:
+        display_cs = display_cs.rename(columns={
+            2025: '2025',
+            '2026 Deleted': 'Del',
+            'Diff (26 vs 25)': 'Diff',
+            '% of 2025': '%',
+            'Remaining': 'Remaining',
+        })
+        for int_col in ['2025', '2026', 'Del', 'Net 2026', 'Diff', 'Remaining']:
             display_cs[int_col] = display_cs[int_col].astype(int)
-        display_cs['% of 2025'] = display_cs['% of 2025'].apply(lambda x: f"{x:.1f}%")
+        display_cs['%'] = display_cs['%'].apply(lambda x: f"{x:.1f}%")
 
         st.dataframe(display_cs, use_container_width=True, hide_index=True, height=500)
 

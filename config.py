@@ -218,7 +218,7 @@ SUGARBUSH_MAP = {
     'Groton':  ['GA', 'GB', 'GC', 'GD'],             # G* sensors (GC includes GCE, GCW)
     'Devils East': ['DHE'],
     'Devils West': ['DHW'],
-    'Lords':   ['LHW', 'LHE'],
+    'Lords':   ['LHW', 'LHE', 'LH'],
     'Matthews': ['M', 'MD'],
     'Ducharme': ['DU'],
 }

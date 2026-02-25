@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from data_loader import save_approved_personnel
 
 
-def render(personnel_df, vacuum_df=None):
+def render(personnel_df, vacuum_df=None, approved_df=None):
     """Render the Manager Data Review page"""
 
     st.title("📋 Manager Data Review")
@@ -58,10 +58,24 @@ def render(personnel_df, vacuum_df=None):
             if pd.isna(max_date):
                 max_date = datetime.now()
 
-            # Default: show ALL data so the manager can see and approve
-            # everything at once.  The manager can narrow the range manually
-            # using the date picker if desired.
+            # Smart default: start from the day after the last approval
+            # so the manager sees only NEW data.  Fall back to full range
+            # if no approvals exist yet.
             default_start = min_date
+            last_approval_label = None
+            if approved_df is not None and not approved_df.empty and 'Approved Date' in approved_df.columns:
+                last_approval = approved_df['Approved Date'].max()
+                if pd.notna(last_approval):
+                    next_day = (last_approval + timedelta(days=1)).date()
+                    mn = min_date.date() if hasattr(min_date, 'date') else min_date
+                    mx = max_date.date() if hasattr(max_date, 'date') else max_date
+                    if mn <= next_day <= mx:
+                        default_start = pd.Timestamp(next_day)
+                        last_approval_label = last_approval.strftime('%Y-%m-%d')
+
+            show_all = st.checkbox("Show all dates", value=False, key="mgr_show_all_dates")
+            if show_all:
+                default_start = min_date
 
             date_range = st.date_input(
                 "Date Range",
@@ -70,6 +84,8 @@ def render(personnel_df, vacuum_df=None):
                 max_value=max_date,
                 key="mgr_review_dates"
             )
+            if last_approval_label and not show_all:
+                st.caption(f"📅 Showing since last approval ({last_approval_label})")
         else:
             date_range = None
 
@@ -299,6 +315,77 @@ def render(personnel_df, vacuum_df=None):
         return  # Don't show editor or approve button until authorized
 
     # ------------------------------------------------------------------
+    # EXCEL UPLOAD (authorized managers only)
+    # ------------------------------------------------------------------
+    with st.expander("📤 Upload Corrected Data (Excel)"):
+        st.markdown(
+            "Upload a corrected timecard Excel file. The data will be saved as "
+            "manager-approved corrections, overriding raw TSheets data."
+        )
+        uploaded_file = st.file_uploader(
+            "Choose an Excel file",
+            type=['xlsx'],
+            key="mgr_excel_upload"
+        )
+        if uploaded_file is not None:
+            try:
+                upload_df = pd.read_excel(uploaded_file)
+                st.success(f"Read **{len(upload_df):,}** rows from `{uploaded_file.name}`")
+
+                # Column mapping: Excel format → dashboard format
+                col_map = {
+                    'site': 'Site',
+                    'mainline': 'mainline.',
+                    'Taps Deleted': 'Taps Removed',
+                }
+                upload_df = upload_df.rename(columns=col_map)
+
+                # Build Employee Name from EE First + EE Last if needed
+                if 'Employee Name' not in upload_df.columns:
+                    if 'EE First' in upload_df.columns and 'EE Last' in upload_df.columns:
+                        upload_df['Employee Name'] = (
+                            upload_df['EE First'].astype(str).str.strip() + ' ' +
+                            upload_df['EE Last'].astype(str).str.strip()
+                        )
+
+                # Ensure Date is datetime
+                if 'Date' in upload_df.columns:
+                    upload_df['Date'] = pd.to_datetime(upload_df['Date'], errors='coerce')
+
+                # Ensure numeric columns
+                for col in ['Hours', 'Rate', 'Taps Put In', 'Taps Removed',
+                            'taps capped', 'Repairs needed']:
+                    if col in upload_df.columns:
+                        upload_df[col] = pd.to_numeric(upload_df[col], errors='coerce').fillna(0)
+
+                # Add approval metadata
+                upload_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+                upload_df['Approved By'] = 'Manager (Excel Upload)'
+
+                # Remove raw-only columns not needed in approved tab
+                for drop_col in ['Employee ID', 'Class', 'vehicle',
+                                 'EE First', 'EE Last', 'Approval Status']:
+                    if drop_col in upload_df.columns:
+                        upload_df = upload_df.drop(columns=[drop_col])
+
+                # Preview
+                st.dataframe(upload_df.head(20), use_container_width=True, hide_index=True)
+                st.caption(f"Showing first 20 of {len(upload_df):,} rows")
+
+                # Upload button
+                if st.button(
+                    f"✅ Upload & Approve All ({len(upload_df):,} rows)",
+                    type="primary",
+                    key="excel_upload_btn"
+                ):
+                    _save_approved(upload_df)
+
+            except Exception as e:
+                st.error(f"Error reading Excel file: {e}")
+
+    st.divider()
+
+    # ------------------------------------------------------------------
     # DATA EDITOR (authorized managers only)
     # ------------------------------------------------------------------
     st.subheader(f"Personnel Data ({len(edit_df)} rows)")
@@ -448,9 +535,11 @@ def _save_approved(edited_df):
     # Prepare the dataframe for saving
     save_df = edited_df.copy()
 
-    # Add approval metadata
-    save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    save_df['Approved By'] = 'Manager'
+    # Add approval metadata (only if not already set, e.g. by Excel upload)
+    if 'Approved Date' not in save_df.columns or save_df['Approved Date'].isna().all():
+        save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    if 'Approved By' not in save_df.columns or save_df['Approved By'].isna().all():
+        save_df['Approved By'] = 'Manager'
 
     # Remove the Approval Status display column (it's computed, not stored)
     if 'Approval Status' in save_df.columns:

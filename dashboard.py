@@ -355,7 +355,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.14 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.15 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -416,7 +416,7 @@ def load_data(days_to_load):
             st.error("Make sure your Google Sheets credentials are properly configured in Streamlit secrets!")
             st.stop()
 
-    return vacuum_df, personnel_df, repairs_df
+    return vacuum_df, personnel_df, repairs_df, approved_df
 
 
 def show_data_info(vacuum_df, personnel_df):
@@ -494,7 +494,7 @@ def main():
     page, days_to_load, site_filter = render_sidebar()
 
     # Load data — personnel_df is the full merged dataset (raw + any approved corrections)
-    vacuum_df, personnel_df, repairs_df = load_data(days_to_load)
+    vacuum_df, personnel_df, repairs_df, approved_df = load_data(days_to_load)
 
     # Show data loading info
     show_data_info(vacuum_df, personnel_df)
@@ -545,7 +545,7 @@ def main():
     elif page == "🧊 Freezing Report":
         freezing_report.render(vacuum_df, personnel_df)
     elif page == "📋 Manager Data Review":
-        manager_review.render(personnel_df, vacuum_df)
+        manager_review.render(personnel_df, vacuum_df, approved_df)
 
 
 if __name__ == "__main__":
