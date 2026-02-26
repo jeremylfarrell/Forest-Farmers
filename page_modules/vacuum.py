@@ -17,13 +17,14 @@ from utils.freeze_thaw import (
 )
 
 
-def get_temperature_data(days=7):
-    """Get historical temperature data from Open-Meteo API"""
+def get_temperature_data(days=7, site='NY'):
+    """Get historical temperature data from Open-Meteo API for a given site."""
     try:
+        coords = config.SITE_COORDINATES.get(site, config.SITE_COORDINATES['NY'])
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "latitude": 43.4267,  # Lake George, NY
-            "longitude": -73.7123,
+            "latitude": coords['lat'],
+            "longitude": coords['lon'],
             "daily": ["temperature_2m_max", "temperature_2m_min"],
             "temperature_unit": "fahrenheit",
             "timezone": "America/New_York",
@@ -45,7 +46,7 @@ def get_temperature_data(days=7):
         temp_df['Above_Freezing'] = (temp_df['High'] > 32) | (temp_df['Low'] > 32)
         
         return temp_df
-    except:
+    except Exception:
         return None
 
 
@@ -115,8 +116,8 @@ def render(vacuum_df, personnel_df):
 
         if not temp_df.empty:
             # Get temperature data
-            temp_data = get_temperature_data(days=7)
-            
+            temp_data = get_temperature_data(days=7, site=viewing_site or 'NY')
+
             # Create date column
             temp_df['Date'] = temp_df[timestamp_col].dt.date
 
@@ -331,7 +332,7 @@ def render(vacuum_df, personnel_df):
     # ============================================================================
 
     # Get temperature data for freeze analysis (reuse if already fetched above)
-    freeze_temp_data = get_temperature_data(days=7)
+    freeze_temp_data = get_temperature_data(days=7, site=viewing_site or 'NY')
     freeze_drops_df = detect_freeze_event_drops(vacuum_df, freeze_temp_data)
 
     is_critical = freeze_status.get('status_label') in ('CRITICAL', 'UPCOMING')

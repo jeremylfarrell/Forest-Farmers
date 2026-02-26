@@ -200,42 +200,6 @@ def calculate_employee_performance(personnel_df, vacuum_df=None):
     return employee_summary
 
 
-def calculate_maintenance_effectiveness(personnel_df, vacuum_df):
-    """
-    Calculate effectiveness of maintenance activities
-
-    Args:
-        personnel_df: Personnel data DataFrame
-        vacuum_df: Vacuum data DataFrame
-
-    Returns:
-        DataFrame with maintenance effectiveness metrics
-    """
-    # This is a simplified version
-    # A more sophisticated version would track vacuum levels before/after specific visits
-
-    if personnel_df.empty or vacuum_df.empty:
-        return pd.DataFrame()
-
-    # Get locations where repairs were done
-    repairs = personnel_df[personnel_df['Repairs needed'] > 0].copy()
-
-    if repairs.empty:
-        return pd.DataFrame()
-
-    # Group by mainline
-    maintenance = repairs.groupby('mainline').agg({
-        'Date': 'max',
-        'Employee Name': 'first',
-        'Hours': 'sum',
-        'Repairs needed': 'sum'
-    }).reset_index()
-
-    maintenance.columns = ['Mainline', 'Last_Repair_Date', 'Employee',
-                           'Hours_Spent', 'Repairs_Count']
-
-    return maintenance
-
 
 def calculate_problem_areas(vacuum_df, personnel_df):
     """

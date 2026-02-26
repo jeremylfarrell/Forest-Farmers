@@ -12,7 +12,7 @@ import plotly.express as px
 import requests
 from datetime import datetime, timedelta
 
-from utils import find_column
+from utils import find_column, is_tapping_job
 import config
 
 
@@ -58,16 +58,6 @@ def get_historical_temperature(lat, lon, start_date, end_date):
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
-
-def _is_tapping_job_code(job_text):
-    """Return True if the job code is a tapping-type code."""
-    if pd.isna(job_text):
-        return False
-    j = str(job_text).lower()
-    return any(kw in j for kw in [
-        'new spout install', 'dropline install', 'spout already on',
-        'maple tapping',
-    ])
 
 
 def _assign_temp_bucket(avg_temp):
@@ -134,7 +124,7 @@ def render(personnel_df, vacuum_df=None):
         df['Mainline'] = df[mainline_col]
 
     # Filter to tapping job codes only
-    df = df[df['Job_Code'].apply(_is_tapping_job_code)].copy()
+    df = df[df['Job_Code'].apply(is_tapping_job)].copy()
 
     if df.empty:
         st.warning("No tapping job records found in the personnel data.")

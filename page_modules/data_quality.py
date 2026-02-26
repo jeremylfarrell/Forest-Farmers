@@ -430,7 +430,7 @@ def load_manager_notes(sheet_url, credentials_path):
         try:
             credentials_dict = st.secrets["gcp_service_account"]
             creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-        except:
+        except Exception:
             # Fall back to local credentials file
             creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
         
@@ -442,7 +442,7 @@ def load_manager_notes(sheet_url, credentials_path):
         # Try to get Alerts_Notes worksheet
         try:
             worksheet = sheet.worksheet('Alerts_Notes')
-        except:
+        except Exception:
             # Create it if it doesn't exist
             worksheet = sheet.add_worksheet(title='Alerts_Notes', rows=1000, cols=10)
             # Add headers
@@ -478,7 +478,7 @@ def save_manager_note(sheet_url, credentials_path, note_data):
         try:
             credentials_dict = st.secrets["gcp_service_account"]
             creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-        except:
+        except Exception:
             creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
         
         client = gspread.authorize(creds)
@@ -526,7 +526,7 @@ def render(personnel_df, vacuum_df):
     # Get configuration
     try:
         personnel_url = st.secrets["sheets"]["PERSONNEL_SHEET_URL"]
-    except:
+    except Exception:
         import os
         from dotenv import load_dotenv
         load_dotenv()

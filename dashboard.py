@@ -357,7 +357,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.16 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.17 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -505,20 +505,14 @@ def main():
     vacuum_df, personnel_df, repairs_df = filter_data_by_site(vacuum_df, personnel_df, repairs_df, site_filter)
 
     # Show filtering info at top of page
-    if site_filter == "NY":
-        sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
-        if not vacuum_df.empty and sensor_col:
-            sensor_count = vacuum_df[sensor_col].nunique()
+    sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
+    if not vacuum_df.empty and sensor_col:
+        sensor_count = vacuum_df[sensor_col].nunique()
+        if site_filter == "NY":
             st.success(f"🟦 **New York View** - {sensor_count} sensors | Last {days_to_load} days")
-    elif site_filter == "VT":
-        sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
-        if not vacuum_df.empty and sensor_col:
-            sensor_count = vacuum_df[sensor_col].nunique()
+        elif site_filter == "VT":
             st.success(f"🟩 **Vermont View** - {sensor_count} sensors | Last {days_to_load} days")
-    else:
-        sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
-        if not vacuum_df.empty and sensor_col:
-            sensor_count = vacuum_df[sensor_col].nunique()
+        else:
             st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last {days_to_load} days")
 
     # Route to selected page

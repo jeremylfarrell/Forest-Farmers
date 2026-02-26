@@ -67,49 +67,6 @@ VARIANCE_THRESHOLD = 20
 AUTO_REFRESH_SECONDS = 300  # 5 minutes
 
 # ============================================================================
-# PAGE CONFIGURATION - Customize what appears on each page
-# ============================================================================
-
-# Pages to show in the dashboard
-PAGES = {
-    'overview': {
-        'title': '🏠 Overview',
-        'enabled': True,
-        'icon': '🏠'
-    },
-    'mainlines': {
-        'title': '📍 Mainline Details',
-        'enabled': True,
-        'icon': '📍'
-    },
-    'employees': {
-        'title': '👥 Employee Performance',
-        'enabled': True,
-        'icon': '👥'
-    },
-    'maintenance': {
-        'title': '🔧 Maintenance Tracking',
-        'enabled': True,
-        'icon': '🔧'
-    },
-    'raw_data': {
-        'title': '📊 Raw Data Explorer',
-        'enabled': True,
-        'icon': '📊'
-    }
-}
-
-# Metrics to show on overview page (in order)
-OVERVIEW_METRICS = [
-    'avg_vacuum',
-    'active_sensors',
-    'problem_areas',
-    'employees_today',
-    'total_hours_today',
-    'repairs_today'
-]
-
-# ============================================================================
 # GOOGLE SHEETS SETTINGS - Which sheets and how to load them
 # ============================================================================
 
@@ -200,7 +157,7 @@ RELEASER_OFF_COLOR = '#808080'        # Gray — vacuum=0 AND releaser diff=0 (p
 DEBUG_MODE = False
 
 # Cache timeout (seconds) - how long to cache data before reloading
-CACHE_TIMEOUT = 300  # 5 minutes
+CACHE_TIMEOUT = 3600  # 1 hour (matches @st.cache_data ttl in data_loader.py)
 
 # Maximum number of rows to display in tables
 MAX_TABLE_ROWS = 100

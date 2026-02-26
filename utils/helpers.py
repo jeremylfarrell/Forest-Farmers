@@ -106,22 +106,6 @@ def filter_recent_sensors(vacuum_df, days=2):
     return filtered_df
 
 
-def safe_divide(numerator, denominator, default=0):
-    """
-    Safely divide two numbers, returning default if denominator is 0
-    
-    Args:
-        numerator: Number to divide
-        denominator: Number to divide by
-        default: Value to return if denominator is 0
-        
-    Returns:
-        Division result or default
-    """
-    if denominator == 0 or pd.isna(denominator):
-        return default
-    return numerator / denominator
-
 
 def format_hours(hours):
     """Format hours for display"""
@@ -144,94 +128,21 @@ def format_percentage(value):
     return f"{value:.1f}%"
 
 
-def get_date_range_text(df, date_col='Date'):
+def is_tapping_job(job_text):
     """
-    Get human-readable date range from a DataFrame
-    
-    Args:
-        df: DataFrame with date column
-        date_col: Name of date column
-        
-    Returns:
-        String describing date range
-    """
-    if df.empty or date_col not in df.columns:
-        return "No data"
-    
-    min_date = df[date_col].min()
-    max_date = df[date_col].max()
-    
-    if pd.isna(min_date) or pd.isna(max_date):
-        return "No valid dates"
-    
-    # Format based on type
-    if hasattr(min_date, 'strftime'):
-        return f"{min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}"
-    else:
-        return f"{min_date} to {max_date}"
+    Return True if the job code is a tapping-type code.
 
-
-def create_status_badge(status_text, color):
+    Tapping jobs are: new spout install, dropline install, spout already on,
+    maple tapping.  This is used by tapping.py, temperature_productivity.py,
+    and any other module that needs to filter to tapping work.
     """
-    Create a colored status badge using HTML
-    
-    Args:
-        status_text: Text to display
-        color: CSS color for badge
-        
-    Returns:
-        HTML string
-    """
-    return f"""
-    <span style="
-        background-color: {color};
-        color: white;
-        padding: 4px 12px;
-        border-radius: 12px;
-        font-weight: bold;
-        font-size: 14px;
-    ">{status_text}</span>
-    """
-
-
-def show_data_loading_info(vacuum_df, personnel_df):
-    """
-    Display data loading information in an expander
-    
-    Args:
-        vacuum_df: Vacuum data DataFrame
-        personnel_df: Personnel data DataFrame
-    """
-    with st.expander("📊 Data Loading Info", expanded=False):
-        st.write("**Vacuum Data:**")
-        if not vacuum_df.empty:
-            st.write(f"- Total records: {len(vacuum_df):,}")
-            if 'Date' in vacuum_df.columns:
-                st.write(f"- Date range: {get_date_range_text(vacuum_df)}")
-            sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name')
-            if sensor_col:
-                st.write(f"- Unique sensors: {vacuum_df[sensor_col].nunique()}")
-        else:
-            st.write("- No data loaded")
-        
-        st.write("**Personnel Data:**")
-        if not personnel_df.empty:
-            st.write(f"- Total records: {len(personnel_df):,}")
-            if 'Date' in personnel_df.columns:
-                st.write(f"- Date range: {get_date_range_text(personnel_df)}")
-            emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
-            if emp_col:
-                st.write(f"- Unique employees: {personnel_df[emp_col].nunique()}")
-            mainline_col = find_column(personnel_df, 'mainline', 'Mainline', 'location', 'sensor')
-            if mainline_col:
-                st.write(f"- Unique locations worked: {personnel_df[mainline_col].nunique()}")
-        else:
-            st.write("- No data loaded")
-
-
-def show_empty_data_message(data_type="data"):
-    """Show a friendly message when no data is available"""
-    st.info(f"📊 No {data_type} available for the selected time period")
+    if pd.isna(job_text):
+        return False
+    j = str(job_text).lower()
+    return any(kw in j for kw in [
+        'new spout install', 'dropline install', 'spout already on',
+        'maple tapping',
+    ])
 
 
 def extract_conductor_system(mainline):

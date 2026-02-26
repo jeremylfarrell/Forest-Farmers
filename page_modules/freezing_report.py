@@ -359,8 +359,12 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                         import requests as _req
                         _temp_url = "https://api.open-meteo.com/v1/forecast"
                         _days = 2 if label == "24H" else 8
+                        _site = 'NY'
+                        if 'Site' in vacuum_df.columns and len(vacuum_df['Site'].unique()) == 1:
+                            _site = vacuum_df['Site'].iloc[0]
+                        _coords = config.SITE_COORDINATES.get(_site, config.SITE_COORDINATES['NY'])
                         _params = {
-                            "latitude": 43.4267, "longitude": -73.7123,
+                            "latitude": _coords['lat'], "longitude": _coords['lon'],
                             "hourly": "temperature_2m",
                             "temperature_unit": "fahrenheit",
                             "timezone": "America/New_York",

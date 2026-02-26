@@ -9,7 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
-from utils import find_column
+from utils import find_column, is_tapping_job
 import config
 
 
@@ -168,17 +168,7 @@ def render(personnel_df, vacuum_df):
     st.subheader("⏱️ Site-Wide Efficiency")
     st.markdown("*Maple Tapping job codes only (new spout install, dropline install & tap, spout already on)*")
 
-    # Helper to identify tapping job codes
-    def _is_tapping_job_code(job_text):
-        if pd.isna(job_text):
-            return False
-        j = str(job_text).lower()
-        return any(kw in j for kw in [
-            'new spout install', 'dropline install', 'spout already on',
-            'maple tapping',
-        ])
-
-    tapping_only = df[df['Job_Code'].apply(_is_tapping_job_code)]
+    tapping_only = df[df['Job_Code'].apply(is_tapping_job)]
     total_tapping_hours = tapping_only['Hours'].sum()
     total_taps = tapping_only['Taps_In'].sum()
 
@@ -359,7 +349,7 @@ def render(personnel_df, vacuum_df):
 
     # Filter to tapping job codes using same filter as efficiency section
     filtered_df = filtered_df.copy()
-    filtered_df['Is_Tapping'] = filtered_df['Job_Code'].apply(_is_tapping_job_code)
+    filtered_df['Is_Tapping'] = filtered_df['Job_Code'].apply(is_tapping_job)
 
     # Filter to only tapping job codes for productivity metrics
     tapping_df = filtered_df[filtered_df['Is_Tapping']].copy()
