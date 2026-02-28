@@ -28,25 +28,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     df = personnel_df.copy()
 
     # ------------------------------------------------------------------
-    # FILTERS
+    # FILTERS — Phase 1: render date + employee inputs, capture values
     # ------------------------------------------------------------------
     st.subheader("Filters")
     col1, col2, col3 = st.columns(3)
-
-    # Figure out smart default date range: cover all pending data
-    has_pending = ('Approval Status' in df.columns and
-                   (df['Approval Status'].isin(['Pending', 'TSheets Updated'])).any())
-
-    # Pre-compute counts for status labels (on full dataset before filtering)
-    _all_count = len(df)
-    if 'Approval Status' in df.columns:
-        _pending_count = len(df[df['Approval Status'] == 'Pending'])
-        _approved_count = len(df[df['Approval Status'] == 'Approved'])
-        _updated_count = len(df[df['Approval Status'] == 'TSheets Updated'])
-    else:
-        _pending_count = _all_count
-        _approved_count = 0
-        _updated_count = 0
 
     with col1:
         # Date range filter
@@ -106,32 +91,9 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         else:
             selected_employees = []
 
-    with col3:
-        # Approval status filter — default to "All" so the manager can see
-        # everything, including recently approved data.  Counts help spot
-        # items needing attention at a glance.
-        status_options = [
-            f"All ({_all_count})",
-            f"Pending Review ({_pending_count})",
-            f"Approved ({_approved_count})",
-        ]
-        # Add TSheets Updated option if any exist
-        if _updated_count > 0:
-            status_options.insert(2, f"TSheets Updated ({_updated_count})")
-
-        default_status_idx = 0  # Always show all statuses by default
-
-        status_filter_raw = st.radio(
-            "Status",
-            status_options,
-            index=default_status_idx,
-            key="mgr_review_status"
-        )
-        # Strip the count suffix for filtering logic
-        status_filter = status_filter_raw.split(" (")[0]
-
     # ------------------------------------------------------------------
-    # APPLY FILTERS
+    # APPLY DATE + EMPLOYEE FILTERS (before rendering status radio so
+    # the counts in the radio labels match what is actually visible)
     # ------------------------------------------------------------------
     filtered = df.copy()
 
@@ -147,12 +109,20 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     if date_range and 'Date' in filtered.columns:
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start, end = date_range
+            # Strip timezone info to avoid silent failures in pandas 2.x when
+            # comparing tz-aware timestamps (Google Sheets) with tz-naive ones.
+            _dates = filtered['Date']
+            if hasattr(_dates.dtype, 'tz') and _dates.dtype.tz is not None:
+                _dates = _dates.dt.tz_localize(None)
             filtered = filtered[
-                (filtered['Date'] >= pd.Timestamp(start)) &
-                (filtered['Date'] <= pd.Timestamp(end))
+                (_dates >= pd.Timestamp(start)) &
+                (_dates <= pd.Timestamp(end))
             ]
         elif isinstance(date_range, (list, tuple)) and len(date_range) == 1:
-            filtered = filtered[filtered['Date'] == pd.Timestamp(date_range[0])]
+            _dates = filtered['Date']
+            if hasattr(_dates.dtype, 'tz') and _dates.dtype.tz is not None:
+                _dates = _dates.dt.tz_localize(None)
+            filtered = filtered[_dates == pd.Timestamp(date_range[0])]
 
     # Always include NaT-date rows so they can be reviewed and approved
     if not nat_rows.empty:
@@ -165,6 +135,38 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     if selected_employees and 'Employee Name' in filtered.columns:
         filtered = filtered[filtered['Employee Name'].isin(selected_employees)]
 
+    # ------------------------------------------------------------------
+    # FILTERS — Phase 2: render status radio with counts from filtered data
+    # (counts now accurately reflect the current date + employee selection)
+    # ------------------------------------------------------------------
+    _all_count = len(filtered)
+    if 'Approval Status' in filtered.columns:
+        _pending_count = len(filtered[filtered['Approval Status'] == 'Pending'])
+        _approved_count = len(filtered[filtered['Approval Status'] == 'Approved'])
+        _updated_count = len(filtered[filtered['Approval Status'] == 'TSheets Updated'])
+    else:
+        _pending_count = _all_count
+        _approved_count = 0
+        _updated_count = 0
+
+    with col3:
+        status_options = [
+            f"All ({_all_count})",
+            f"Pending Review ({_pending_count})",
+            f"Approved ({_approved_count})",
+        ]
+        if _updated_count > 0:
+            status_options.insert(2, f"TSheets Updated ({_updated_count})")
+
+        status_filter_raw = st.radio(
+            "Status",
+            status_options,
+            index=0,
+            key="mgr_review_status"
+        )
+        status_filter = status_filter_raw.split(" (")[0]
+
+    # Apply status filter
     if status_filter != "All" and 'Approval Status' in filtered.columns:
         if status_filter == "Pending Review":
             filtered = filtered[filtered['Approval Status'] == 'Pending']
@@ -207,7 +209,27 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     st.divider()
 
     if filtered.empty:
-        st.warning("No data matches the selected filters.")
+        # Give a helpful explanation rather than a generic message.
+        # Check full dataset for rows matching the selected status so the
+        # manager knows whether to expand the date range or there is truly
+        # nothing to review.
+        _status_map = {
+            "Pending Review": "Pending",
+            "Approved": "Approved",
+            "TSheets Updated": "TSheets Updated",
+        }
+        if status_filter != "All" and status_filter in _status_map and 'Approval Status' in df.columns:
+            _full_count = len(df[df['Approval Status'] == _status_map[status_filter]])
+            if _full_count > 0:
+                st.warning(
+                    f"No **{status_filter}** rows in the selected date range — "
+                    f"but there are **{_full_count}** across all dates. "
+                    "Try checking **Show all dates** to see them."
+                )
+            else:
+                st.info(f"No rows with status **{status_filter}**.")
+        else:
+            st.warning("No data matches the selected filters.")
         return
 
     # ------------------------------------------------------------------
@@ -390,8 +412,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     # ------------------------------------------------------------------
     st.subheader(f"Personnel Data ({len(edit_df)} rows)")
     st.caption(
-        "Edit any cell below. When done reviewing, click **Approve Selected Data** "
-        "to save your corrections."
+        "Edit any cell below. "
+        "⚠️ **Press Enter or Tab after editing a cell** to commit the change before clicking Approve — "
+        "edits in an active (highlighted) cell are not captured. "
+        "When done reviewing, click **Approve All** to save your corrections."
     )
 
     # Column configuration
@@ -477,7 +501,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         2. **Enter the manager password** to unlock editing (the table is read-only until you authenticate)
         3. **Review** each row — check hours, taps, mainlines, job codes, etc.
         4. **Edit** any cell that needs correction (click the cell to edit)
-        5. Click **Approve Selected Data** — you'll get a confirmation prompt before it saves
+        5. Click **Approve All** — you'll get a confirmation prompt before it saves
 
         **What happens when you approve:**
         - All rows currently shown in the editor are saved to the
@@ -551,6 +575,9 @@ def _save_approved(edited_df):
     if success:
         st.success(f"✅ {message}")
         st.balloons()
+        # Clear the data cache so the next render fetches fresh data from
+        # Google Sheets rather than showing the stale pre-approval version.
+        st.cache_data.clear()
         st.rerun()
     else:
         st.error(f"❌ {message}")
