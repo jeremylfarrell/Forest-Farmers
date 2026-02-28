@@ -468,7 +468,12 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         'Hours': st.column_config.NumberColumn('Hours', min_value=0, max_value=24, step=0.25, format="%.2f"),
         'Rate': st.column_config.NumberColumn('Rate', min_value=0, step=0.5, format="%.2f"),
         'Job': st.column_config.TextColumn('Job', width='large'),
-        'mainline.': st.column_config.TextColumn('Mainline', width='medium'),
+        # mainline. is part of the merge key (emp|date|job|mainline) that
+        # matches raw rows to approved rows.  If a manager edits this value
+        # the saved key changes, the merge can no longer match it to the raw
+        # row, and the row stays Pending forever.  Treat it as read-only —
+        # corrections to mainline must come from TSheets (re-sync the data).
+        'mainline.': st.column_config.TextColumn('Mainline', width='medium', disabled=True),
         'Taps Put In': st.column_config.NumberColumn('Taps In', min_value=0, step=1, format="%d"),
         'Taps Removed': st.column_config.NumberColumn('Taps Out', min_value=0, step=1, format="%d"),
         'taps capped': st.column_config.NumberColumn('Capped', min_value=0, step=1, format="%d"),
