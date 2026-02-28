@@ -314,8 +314,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
             )
 
-    # Ensure string columns don't have NaN displayed
-    for col in ['Notes', 'Job', 'Employee Name', 'Site']:
+    # Ensure string columns don't have NaN displayed.
+    # mainline. is included so that empty cells show as blank (not 'nan')
+    # and produce clean '' values in edited_data → consistent with make_key().
+    for col in ['Notes', 'Job', 'Employee Name', 'Site', 'mainline.']:
         if col in edit_df.columns:
             edit_df[col] = edit_df[col].fillna('').astype(str)
 

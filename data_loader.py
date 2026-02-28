@@ -494,9 +494,15 @@ def merge_approved_data(raw_df, approved_df):
             return result
 
     def make_key(df):
-        emp = df['Employee Name'].astype(str)
+        # IMPORTANT: fillna('') MUST come before astype(str).
+        # astype(str) converts float NaN to the literal string 'nan', after
+        # which fillna('') has no effect.  Swapping the order ensures NaN
+        # values become '' before string conversion, so empty-mainline raw
+        # rows and empty-mainline approved rows produce identical keys.
+        # .str.strip() removes invisible trailing spaces that TSheets can add.
+        emp = df['Employee Name'].fillna('').astype(str).str.strip()
         date = df['Date'].dt.strftime('%Y-%m-%d').fillna('')
-        job = df['Job'].astype(str)
+        job = df['Job'].fillna('').astype(str).str.strip()
         # Include mainline so that multiple entries per employee/date/job
         # (different mainlines) are matched individually.
         # Prefer 'mainline.' (with period) — matches the approved_personnel
@@ -504,7 +510,8 @@ def merge_approved_data(raw_df, approved_df):
         ml_col = 'mainline.' if 'mainline.' in df.columns else next(
             (c for c in df.columns if 'mainline' in c.lower()), None
         )
-        ml = df[ml_col].astype(str).fillna('') if ml_col else pd.Series('', index=df.index)
+        ml = df[ml_col].fillna('').astype(str).str.strip() if ml_col \
+            else pd.Series('', index=df.index)
         return emp + '|' + date + '|' + job + '|' + ml
 
     raw = raw_df.copy()
