@@ -548,6 +548,85 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 st.rerun()
 
     # ------------------------------------------------------------------
+    # APPROVAL DIAGNOSTICS (collapsed — for troubleshooting only)
+    # ------------------------------------------------------------------
+    with st.expander("🔍 Approval Diagnostics (troubleshooting)"):
+        st.caption(
+            "Use this panel to see the exact keys the merge comparison is generating. "
+            "If raw 'Pending' keys and approved keys look identical but rows still show as "
+            "Pending, report what you see here."
+        )
+        col_d1, col_d2 = st.columns(2)
+
+        with col_d1:
+            st.markdown("**📄 Approved data from Google Sheets**")
+            if approved_df is not None and not approved_df.empty:
+                st.write(f"Rows in approved_personnel tab: **{len(approved_df)}**")
+                _ml_col_a = 'mainline.' if 'mainline.' in approved_df.columns else None
+                if _ml_col_a:
+                    _ml_vcounts = (
+                        approved_df[_ml_col_a].fillna('‹NaN›').astype(str)
+                        .value_counts().head(6).to_dict()
+                    )
+                    st.write(f"`mainline.` values: `{_ml_vcounts}`")
+                else:
+                    st.warning("⚠️ No `mainline.` column in approved data")
+                # Show sample keys (repr reveals hidden whitespace/chars)
+                st.markdown("**Sample keys (repr shows hidden chars):**")
+                for _, _row in approved_df.head(5).iterrows():
+                    _emp = str(_row.get('Employee Name', ''))
+                    _dv = _row.get('Date', '')
+                    _ds = _dv.strftime('%Y-%m-%d') if hasattr(_dv, 'strftime') else str(_dv)
+                    _job = str(_row.get('Job', ''))
+                    _ml  = str(_row.get(_ml_col_a, '')) if _ml_col_a else ''
+                    st.code(
+                        f"{repr(_emp)}|{repr(_ds)}|"
+                        f"{repr(_job[:30])}|{repr(_ml)}"
+                    )
+            else:
+                st.info("No approved data found in Google Sheets tab")
+
+        with col_d2:
+            st.markdown("**📊 Personnel data (post-merge)**")
+            if 'Approval Status' in df.columns:
+                for _st_val, _cnt in df['Approval Status'].value_counts().items():
+                    st.write(f"- {_st_val}: **{_cnt}**")
+            else:
+                st.warning("No `Approval Status` column — merge may not have run")
+
+            _ml_col_r = (
+                'mainline.' if 'mainline.' in df.columns
+                else 'mainline' if 'mainline' in df.columns
+                else None
+            )
+            if _ml_col_r:
+                _ml_vcounts_r = (
+                    df[_ml_col_r].fillna('‹NaN›').astype(str)
+                    .value_counts().head(6).to_dict()
+                )
+                st.write(f"`{_ml_col_r}` values (top 6): `{_ml_vcounts_r}`")
+            else:
+                st.warning("⚠️ No mainline column in raw/merged data")
+
+            # Sample PENDING keys — these should match approved keys above
+            _pending_sample = (
+                df[df['Approval Status'] == 'Pending'].head(5)
+                if 'Approval Status' in df.columns else pd.DataFrame()
+            )
+            if not _pending_sample.empty:
+                st.markdown("**Sample PENDING keys (repr shows hidden chars):**")
+                for _, _row in _pending_sample.iterrows():
+                    _emp = str(_row.get('Employee Name', ''))
+                    _dv  = _row.get('Date', '')
+                    _ds  = _dv.strftime('%Y-%m-%d') if hasattr(_dv, 'strftime') else str(_dv)
+                    _job = str(_row.get('Job', ''))
+                    _ml  = str(_row.get(_ml_col_r, '')) if _ml_col_r else ''
+                    st.code(
+                        f"{repr(_emp)}|{repr(_ds)}|"
+                        f"{repr(_job[:30])}|{repr(_ml)}"
+                    )
+
+    # ------------------------------------------------------------------
     # HELP
     # ------------------------------------------------------------------
     with st.expander("ℹ️ How to use Manager Data Review"):
