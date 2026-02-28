@@ -588,14 +588,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 st.markdown("**Sample keys (repr shows hidden chars):**")
                 for _, _row in approved_df.head(5).iterrows():
                     _emp = str(_row.get('Employee Name', ''))
-                    _dv = _row.get('Date', '')
-                    _ds = _dv.strftime('%Y-%m-%d') if hasattr(_dv, 'strftime') else str(_dv)
-                    _job = str(_row.get('Job', ''))
-                    _ml  = str(_row.get(_ml_col_a, '')) if _ml_col_a else ''
-                    st.code(
-                        f"{repr(_emp)}|{repr(_ds)}|"
-                        f"{repr(_job[:30])}|{repr(_ml)}"
-                    )
+                    _dv  = _row.get('Date', '')
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    _ml_val = str(_row.get(_ml_col_a, '')) if _ml_col_a else ''
+                    st.code(f"{repr(_emp)}|{repr(_ds)}  [mainline.={repr(_ml_val)}]")
             else:
                 st.info("No approved data found in Google Sheets tab")
 
@@ -621,23 +617,46 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             else:
                 st.warning("⚠️ No mainline column in raw/merged data")
 
-            # Sample PENDING keys — these should match approved keys above
+            # Per-status mainline. breakdown
+            if _ml_col_r and 'Approval Status' in df.columns:
+                st.markdown("**`mainline.` by status:**")
+                for _status in ['Approved', 'TSheets Updated', 'Pending']:
+                    _sub = df[df['Approval Status'] == _status]
+                    if not _sub.empty:
+                        _counts = (
+                            _sub[_ml_col_r].fillna('‹NaN›').astype(str)
+                            .value_counts().head(4).to_dict()
+                        )
+                        st.write(f"  *{_status}*: `{_counts}`")
+
+            # Sample APPROVED keys
+            _approved_sample = (
+                df[df['Approval Status'].isin(['Approved', 'TSheets Updated'])].head(5)
+                if 'Approval Status' in df.columns else pd.DataFrame()
+            )
+            if not _approved_sample.empty:
+                st.markdown("**Sample APPROVED keys:**")
+                for _, _row in _approved_sample.iterrows():
+                    _emp = str(_row.get('Employee Name', ''))
+                    _dv  = _row.get('Date', '')
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    _ml_val = str(_row.get(_ml_col_r, '')) if _ml_col_r else ''
+                    st.code(f"{repr(_emp)}|{repr(_ds)}  [mainline.={repr(_ml_val)}]")
+            else:
+                st.info("No Approved rows in merged data yet")
+
+            # Sample PENDING keys (should NOT match any approved keys)
             _pending_sample = (
                 df[df['Approval Status'] == 'Pending'].head(5)
                 if 'Approval Status' in df.columns else pd.DataFrame()
             )
             if not _pending_sample.empty:
-                st.markdown("**Sample PENDING keys (repr shows hidden chars):**")
+                st.markdown("**Sample PENDING keys:**")
                 for _, _row in _pending_sample.iterrows():
                     _emp = str(_row.get('Employee Name', ''))
                     _dv  = _row.get('Date', '')
-                    _ds  = _dv.strftime('%Y-%m-%d') if hasattr(_dv, 'strftime') else str(_dv)
-                    _job = str(_row.get('Job', ''))
-                    _ml  = str(_row.get(_ml_col_r, '')) if _ml_col_r else ''
-                    st.code(
-                        f"{repr(_emp)}|{repr(_ds)}|"
-                        f"{repr(_job[:30])}|{repr(_ml)}"
-                    )
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    st.code(f"{repr(_emp)}|{repr(_ds)}")
 
     # ------------------------------------------------------------------
     # HELP
