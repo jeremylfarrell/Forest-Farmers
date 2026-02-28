@@ -589,7 +589,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 for _, _row in approved_df.head(5).iterrows():
                     _emp = str(_row.get('Employee Name', ''))
                     _dv  = _row.get('Date', '')
-                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if (hasattr(_dv, 'strftime') and pd.notna(_dv)) else str(_dv)
                     _ml_val = str(_row.get(_ml_col_a, '')) if _ml_col_a else ''
                     st.code(f"{repr(_emp)}|{repr(_ds)}  [mainline.={repr(_ml_val)}]")
             else:
@@ -639,7 +639,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 for _, _row in _approved_sample.iterrows():
                     _emp = str(_row.get('Employee Name', ''))
                     _dv  = _row.get('Date', '')
-                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if (hasattr(_dv, 'strftime') and pd.notna(_dv)) else str(_dv)
                     _ml_val = str(_row.get(_ml_col_r, '')) if _ml_col_r else ''
                     st.code(f"{repr(_emp)}|{repr(_ds)}  [mainline.={repr(_ml_val)}]")
             else:
@@ -655,7 +655,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 for _, _row in _pending_sample.iterrows():
                     _emp = str(_row.get('Employee Name', ''))
                     _dv  = _row.get('Date', '')
-                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if hasattr(_dv, 'strftime') else str(_dv)
+                    _ds  = _dv.strftime('%Y-%m-%d %H:%M') if (hasattr(_dv, 'strftime') and pd.notna(_dv)) else str(_dv)
                     st.code(f"{repr(_emp)}|{repr(_ds)}")
 
     # ------------------------------------------------------------------
