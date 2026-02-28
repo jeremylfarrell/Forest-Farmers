@@ -46,19 +46,39 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             # Smart default: start from the day after the last approval
             # so the manager sees only NEW data.  Fall back to full range
             # if no approvals exist yet.
-            default_start = min_date
+            smart_default = min_date
             last_approval_label = None
             if approved_df is not None and not approved_df.empty and 'Approved Date' in approved_df.columns:
-                last_approval = approved_df['Approved Date'].max()
-                if pd.notna(last_approval):
-                    next_day = (last_approval + timedelta(days=1)).date()
-                    mn = min_date.date() if hasattr(min_date, 'date') else min_date
-                    mx = max_date.date() if hasattr(max_date, 'date') else max_date
-                    if mn <= next_day <= mx:
-                        default_start = pd.Timestamp(next_day)
-                        last_approval_label = last_approval.strftime('%Y-%m-%d')
+                try:
+                    last_approval = approved_df['Approved Date'].max()
+                    # Guard against object-dtype strings returned by a failed
+                    # type conversion — hasattr check ensures strftime exists.
+                    if pd.notna(last_approval) and hasattr(last_approval, 'strftime'):
+                        next_day = (last_approval + timedelta(days=1)).date()
+                        mn = min_date.date() if hasattr(min_date, 'date') else min_date
+                        mx = max_date.date() if hasattr(max_date, 'date') else max_date
+                        if mn <= next_day <= mx:
+                            smart_default = pd.Timestamp(next_day)
+                            last_approval_label = last_approval.strftime('%Y-%m-%d')
+                except Exception:
+                    pass  # non-fatal — fall back to full date range
+
+            default_start = smart_default
 
             show_all = st.checkbox("Show all dates", value=False, key="mgr_show_all_dates")
+
+            # When show_all is toggled, force-update the date_input session
+            # state.  st.date_input ignores its value= parameter once the key
+            # exists in st.session_state (after the user first touches the
+            # widget), so we must write directly to session_state on change.
+            _prev_show_all = st.session_state.get("_mgr_show_all_prev", None)
+            if _prev_show_all is not None and show_all != _prev_show_all:
+                _sd = min_date if show_all else smart_default
+                _sd = _sd.date() if hasattr(_sd, 'date') else _sd
+                _ed = max_date.date() if hasattr(max_date, 'date') else max_date
+                st.session_state["mgr_review_dates"] = (_sd, _ed)
+            st.session_state["_mgr_show_all_prev"] = show_all
+
             if show_all:
                 default_start = min_date
 
@@ -107,6 +127,12 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             filtered = filtered[~nat_mask]
 
     if date_range and 'Date' in filtered.columns:
+        # Normalize: date_input can return a plain date scalar (not a tuple) in
+        # transient state while the user is mid-selection.  Without this guard
+        # neither branch below would match and the filter would silently be
+        # skipped — showing all rows regardless of the selected range.
+        if not isinstance(date_range, (list, tuple)):
+            date_range = (date_range,)
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start, end = date_range
             # Strip timezone info to avoid silent failures in pandas 2.x when
@@ -150,21 +176,28 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         _updated_count = 0
 
     with col3:
-        status_options = [
-            f"All ({_all_count})",
-            f"Pending Review ({_pending_count})",
-            f"Approved ({_approved_count})",
-        ]
+        # Build label → canonical-value map so we never parse the label string.
+        _status_opt_map = {
+            f"All ({_all_count})": "All",
+            f"Pending Review ({_pending_count})": "Pending Review",
+            f"Approved ({_approved_count})": "Approved",
+        }
         if _updated_count > 0:
-            status_options.insert(2, f"TSheets Updated ({_updated_count})")
+            # Insert TSheets Updated between Pending Review and Approved
+            _items = list(_status_opt_map.items())
+            _status_opt_map = dict(
+                _items[:2]
+                + [(f"TSheets Updated ({_updated_count})", "TSheets Updated")]
+                + _items[2:]
+            )
 
         status_filter_raw = st.radio(
             "Status",
-            status_options,
+            list(_status_opt_map.keys()),
             index=0,
             key="mgr_review_status"
         )
-        status_filter = status_filter_raw.split(" (")[0]
+        status_filter = _status_opt_map.get(status_filter_raw, "All")
 
     # Apply status filter
     if status_filter != "All" and 'Approval Status' in filtered.columns:
@@ -240,14 +273,22 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     display_cols = [
         'Employee Name', 'Date', 'Hours', 'Rate', 'Job', 'mainline.',
         'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed',
-        'Notes', 'Site', 'Clock In', 'Clock Out', 'Approval Status'
+        'Notes', 'Site', 'Clock In', 'Clock Out',
+        'Approved Date', 'Approved By',   # audit trail — shown read-only below
+        'Approval Status'
     ]
-    # Also include any other columns the manager might want to see
-    # (e.g., Vehicle Used if it exists in the data)
+    # Include any extra columns from the data (e.g. Vehicle Used).
+    # Exclude internal/duplicate columns that would confuse the editor:
+    #  - '_merge_key'  : internal join key
+    #  - 'mainline'    : no-period duplicate created by process_personnel_data
+    #  - 'Approved Date', 'Approved By' : already included above
+    _EXCLUDE_FROM_EDITOR = {
+        '_merge_key', 'mainline', 'Approved Date', 'Approved By',
+    }
     for extra_col in filtered.columns:
-        if extra_col not in display_cols and extra_col not in ('_merge_key',):
+        if extra_col not in display_cols and extra_col not in _EXCLUDE_FROM_EDITOR:
             display_cols.append(extra_col)
-    # Only use columns that exist
+    # Only use columns that exist in the data
     display_cols = [c for c in display_cols if c in filtered.columns]
 
     edit_df = filtered[display_cols].copy()
@@ -316,7 +357,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             # Check against Streamlit secrets first, fall back to hardcoded default
             try:
                 correct_pw = st.secrets["passwords"]["manager_password"]
-            except (KeyError, FileNotFoundError, AttributeError):
+            except (KeyError, AttributeError):
                 correct_pw = "MapleBirch"
             if entered == correct_pw:
                 st.session_state["manager_edit_authorized"] = True
@@ -436,9 +477,23 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         ),
         'Clock In': st.column_config.TextColumn('Clock In', help='YYYY-MM-DD HH:MM'),
         'Clock Out': st.column_config.TextColumn('Clock Out', help='YYYY-MM-DD HH:MM'),
+        'Approved Date': st.column_config.TextColumn(
+            'Approved', disabled=True,
+            help='When this row was last reviewed and approved'
+        ),
+        'Approved By': st.column_config.TextColumn(
+            'Approved By', disabled=True,
+            help='Who approved this row'
+        ),
         'Approval Status': st.column_config.TextColumn('Status', disabled=True,
                                                          help='Set automatically on approval'),
     }
+    # Disable any column not explicitly configured above (e.g. extra raw-data
+    # columns added by the extra-cols loop).  Prevents unintended edits to
+    # system or TSheets-generated fields.
+    for _col in display_cols:
+        if _col not in column_config:
+            column_config[_col] = st.column_config.TextColumn(_col, disabled=True)
 
     edited_data = st.data_editor(
         edit_df,
@@ -540,7 +595,7 @@ def _save_approved(edited_df):
     try:
         if hasattr(st, 'secrets') and 'sheets' in st.secrets:
             sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
-    except (KeyError, FileNotFoundError):
+    except (KeyError, AttributeError):
         pass
 
     if not sheet_url:
@@ -559,11 +614,17 @@ def _save_approved(edited_df):
     # Prepare the dataframe for saving
     save_df = edited_df.copy()
 
-    # Add approval metadata (only if not already set, e.g. by Excel upload)
-    if 'Approved Date' not in save_df.columns or save_df['Approved Date'].isna().all():
-        save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
-    if 'Approved By' not in save_df.columns or save_df['Approved By'].isna().all():
+    # Always stamp a fresh approval timestamp so that re-approvals of
+    # TSheets-Updated rows correctly update the audit trail.
+    save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    # Set approver for any row that doesn't already have one.  The Excel
+    # Upload path pre-sets 'Manager (Excel Upload)' — that value is preserved.
+    if 'Approved By' not in save_df.columns:
         save_df['Approved By'] = 'Manager'
+    else:
+        save_df['Approved By'] = (
+            save_df['Approved By'].fillna('Manager').replace('', 'Manager')
+        )
 
     # Remove the Approval Status display column (it's computed, not stored)
     if 'Approval Status' in save_df.columns:
@@ -575,9 +636,10 @@ def _save_approved(edited_df):
     if success:
         st.success(f"✅ {message}")
         st.balloons()
-        # Clear the data cache so the next render fetches fresh data from
-        # Google Sheets rather than showing the stale pre-approval version.
-        st.cache_data.clear()
+        # save_approved_personnel already cleared the personnel caches
+        # (load_approved_personnel, load_all_personnel_data, process_personnel_data).
+        # A full st.cache_data.clear() is intentionally avoided here — it would
+        # also evict vacuum data and force expensive reloads on the next render.
         st.rerun()
     else:
         st.error(f"❌ {message}")
