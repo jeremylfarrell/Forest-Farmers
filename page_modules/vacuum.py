@@ -7,47 +7,26 @@ UPDATED: Freeze/thaw smart display — highlights critical monitoring periods
 
 import streamlit as st
 import pandas as pd
-import requests
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import config
-from utils import find_column, get_vacuum_column
+from utils import find_column, get_vacuum_column, get_releaser_column, extract_conductor_system
 from utils.freeze_thaw import (
     get_current_freeze_thaw_status,
     detect_freeze_event_drops,
-    render_freeze_thaw_banner
+    render_freeze_thaw_banner,
+    add_freeze_bands_to_figure
 )
+from utils.weather_api import get_temperature_data
 
 
-def get_temperature_data(days=7, site='NY'):
-    """Get historical temperature data from Open-Meteo API for a given site."""
-    try:
-        coords = config.SITE_COORDINATES.get(site, config.SITE_COORDINATES['NY'])
-        url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": coords['lat'],
-            "longitude": coords['lon'],
-            "daily": ["temperature_2m_max", "temperature_2m_min"],
-            "temperature_unit": "fahrenheit",
-            "timezone": "America/New_York",
-            "past_days": days,
-            "forecast_days": 0
-        }
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        data = response.json()['daily']
-        
-        # Create dataframe
-        temp_df = pd.DataFrame({
-            'Date': pd.to_datetime(data['time']),
-            'High': data['temperature_2m_max'],
-            'Low': data['temperature_2m_min']
-        })
-        
-        # Check if any temp was above freezing
-        temp_df['Above_Freezing'] = (temp_df['High'] > 32) | (temp_df['Low'] > 32)
-        
-        return temp_df
-    except Exception:
-        return None
+def _get_vacuum_cols(df):
+    """Return (sensor_col, vacuum_col, timestamp_col, releaser_col) for a vacuum DataFrame."""
+    sensor_col = find_column(df, 'Name', 'name', 'Sensor Name', 'sensor')
+    vacuum_col = get_vacuum_column(df)
+    timestamp_col = find_column(df, 'Last communication', 'Last Communication', 'Timestamp', 'timestamp')
+    releaser_col = get_releaser_column(df)
+    return sensor_col, vacuum_col, timestamp_col, releaser_col
 
 
 def render(vacuum_df, personnel_df):
@@ -148,8 +127,6 @@ def render(vacuum_df, personnel_df):
                 display_daily['Date'] = pd.to_datetime(display_daily['Date'])
 
                 # Create nice chart with plotly for better control
-                import plotly.graph_objects as go
-                
                 fig = go.Figure()
                 
                 # Add vacuum trace
@@ -176,25 +153,7 @@ def render(vacuum_df, personnel_df):
                     ))
                 
                 # Add freeze/thaw day highlighting (blue bands)
-                if temp_data is not None and 'Low' in temp_data.columns:
-                    for _, trow in temp_data.iterrows():
-                        t_high = trow.get('High')
-                        t_low = trow.get('Low')
-                        if t_high is not None and t_low is not None:
-                            if t_low < config.FREEZING_POINT and t_high > config.FREEZING_POINT:
-                                d = trow['Date']
-                                if hasattr(d, 'date'):
-                                    d = d.date()
-                                fig.add_vrect(
-                                    x0=pd.Timestamp(d) - pd.Timedelta(hours=12),
-                                    x1=pd.Timestamp(d) + pd.Timedelta(hours=12),
-                                    fillcolor="rgba(100, 149, 237, 0.15)",
-                                    line_width=0,
-                                    annotation_text="F/T",
-                                    annotation_position="top left",
-                                    annotation_font_size=9,
-                                    annotation_font_color="cornflowerblue",
-                                )
+                add_freeze_bands_to_figure(fig, temp_data, annotate=True)
 
                 # Add 32°F freeze reference line on temp axis
                 if 'High' in display_daily.columns:
@@ -283,8 +242,6 @@ def render(vacuum_df, personnel_df):
                 hourly = hourly.sort_values('Hour')
                 
                 # Create hourly chart
-                import plotly.graph_objects as go
-                
                 fig = go.Figure()
                 
                 fig.add_trace(go.Bar(
@@ -654,15 +611,7 @@ def render(vacuum_df, personnel_df):
 
 def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
     """Render a plotly chart showing vacuum trends for flagged sensors with freeze-day shading."""
-    import plotly.graph_objects as go
-    from utils import find_column, get_vacuum_column
-
-    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
-    vacuum_col = get_vacuum_column(vacuum_df)
-    timestamp_col = find_column(
-        vacuum_df, 'Last communication', 'Last Communication',
-        'Timestamp', 'timestamp'
-    )
+    sensor_col, vacuum_col, timestamp_col, _ = _get_vacuum_cols(vacuum_df)
 
     if not all([sensor_col, vacuum_col, timestamp_col]):
         return
@@ -689,22 +638,7 @@ def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
         ))
 
     # Add freeze-day shading
-    if temp_data is not None and 'Low' in temp_data.columns:
-        freezing = config.FREEZING_POINT
-        for _, row in temp_data.iterrows():
-            t_high = row.get('High')
-            t_low = row.get('Low')
-            if t_high is not None and t_low is not None:
-                if t_low < freezing and t_high > freezing:
-                    d = row['Date']
-                    if hasattr(d, 'date'):
-                        d = d.date()
-                    fig.add_vrect(
-                        x0=pd.Timestamp(d) - pd.Timedelta(hours=12),
-                        x1=pd.Timestamp(d) + pd.Timedelta(hours=12),
-                        fillcolor="rgba(100, 149, 237, 0.15)",
-                        line_width=0,
-                    )
+    add_freeze_bands_to_figure(fig, temp_data)
 
     fig.update_layout(
         title="Flagged Sensors — Vacuum During Freeze Events",
@@ -724,9 +658,6 @@ def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
 
 def _render_freezing_report(vacuum_df):
     """Render the freezing report section with graduated releaser differential colors."""
-    import plotly.graph_objects as go
-    from utils import find_column, get_vacuum_column, get_releaser_column, extract_conductor_system
-
     st.subheader("🧊 Freezing Report — Releaser Differential")
     st.caption(
         "Color-coded by releaser differential: "
@@ -735,13 +666,7 @@ def _render_freezing_report(vacuum_df):
         "Gray = pump off (both 0)."
     )
 
-    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
-    vacuum_col = get_vacuum_column(vacuum_df)
-    releaser_col = get_releaser_column(vacuum_df)
-    timestamp_col = find_column(
-        vacuum_df, 'Last communication', 'Last Communication',
-        'Timestamp', 'timestamp'
-    )
+    sensor_col, vacuum_col, timestamp_col, releaser_col = _get_vacuum_cols(vacuum_df)
 
     if not releaser_col:
         st.info("No releaser differential column found in vacuum data. "
@@ -876,20 +801,10 @@ def _render_freezing_report(vacuum_df):
 
 def _render_sensor_drilldown(vacuum_df):
     """Render per-mainline time-series charts: Last 24H and Last 7 Days."""
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    from utils import find_column, get_vacuum_column, get_releaser_column
-
     st.subheader("🔍 Sensor Detail — Vacuum Over Time")
     st.caption("Select a sensor to view its vacuum and releaser differential history")
 
-    sensor_col = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
-    vacuum_col = get_vacuum_column(vacuum_df)
-    releaser_col = get_releaser_column(vacuum_df)
-    timestamp_col = find_column(
-        vacuum_df, 'Last communication', 'Last Communication',
-        'Timestamp', 'timestamp'
-    )
+    sensor_col, vacuum_col, timestamp_col, releaser_col = _get_vacuum_cols(vacuum_df)
 
     if not all([sensor_col, vacuum_col, timestamp_col]):
         st.warning("Missing required columns for sensor drill-down.")

@@ -6,6 +6,7 @@ Tracks before/after vacuum levels for repair job codes
 
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
 from metrics import calculate_employee_effectiveness
 
 
@@ -352,8 +353,7 @@ def render(personnel_df, vacuum_df):
     # Site comparison chart if applicable
     if 'Site' in effectiveness_df.columns and len(effectiveness_df['Site'].unique()) > 1:
         st.subheader("📊 Cross-Site Repair Effectiveness")
-        
-        import plotly.graph_objects as go
+
         
         # Calculate average improvement by site
         site_avg = effectiveness_df.groupby('Site')['Improvement'].mean().reset_index()

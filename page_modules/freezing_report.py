@@ -9,6 +9,8 @@ import pandas as pd
 import io
 import re
 from datetime import datetime, timedelta
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 import config
 from utils import (
@@ -16,6 +18,7 @@ from utils import (
 )
 from utils.helpers import get_releaser_column
 from utils.freeze_thaw import get_current_freeze_thaw_status, render_freeze_thaw_banner
+from utils.weather_api import get_hourly_temperature
 
 
 def render(vacuum_df, personnel_df):
@@ -239,9 +242,6 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
 def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                               releaser_col, timestamp_col, vdf, personnel_df):
     """Render detailed report for a single conductor system."""
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-
     cdf = latest[latest['Conductor'] == conductor].copy()
 
     if cdf.empty:
@@ -355,55 +355,37 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                         )
 
                     # Add temperature overlay
-                    try:
-                        import requests as _req
-                        _temp_url = "https://api.open-meteo.com/v1/forecast"
-                        _days = 2 if label == "24H" else 8
-                        _site = 'NY'
-                        if 'Site' in vacuum_df.columns and len(vacuum_df['Site'].unique()) == 1:
-                            _site = vacuum_df['Site'].iloc[0]
-                        _coords = config.SITE_COORDINATES.get(_site, config.SITE_COORDINATES['NY'])
-                        _params = {
-                            "latitude": _coords['lat'], "longitude": _coords['lon'],
-                            "hourly": "temperature_2m",
-                            "temperature_unit": "fahrenheit",
-                            "timezone": "America/New_York",
-                            "past_days": _days, "forecast_days": 0
-                        }
-                        _resp = _req.get(_temp_url, params=_params, timeout=3)
-                        if _resp.ok:
-                            _td = _resp.json()['hourly']
-                            _temp_series = pd.DataFrame({
-                                'time': pd.to_datetime(_td['time']),
-                                'temp': _td['temperature_2m']
-                            })
-                            _temp_series = _temp_series[
-                                (_temp_series['time'] >= data[timestamp_col].min()) &
-                                (_temp_series['time'] <= data[timestamp_col].max())
-                            ]
-                            if not _temp_series.empty:
-                                fig.add_trace(
-                                    go.Scatter(
-                                        x=_temp_series['time'],
-                                        y=_temp_series['temp'],
-                                        mode='lines',
-                                        name='Temp (F)',
-                                        line=dict(color='#999999', width=1,
-                                                  dash='dot'),
-                                        yaxis='y3',
-                                        hovertemplate='%{y:.0f}°F<extra></extra>',
-                                    )
+                    _days = 2 if label == "24H" else 8
+                    _site = 'NY'
+                    if 'Site' in vacuum_df.columns and len(vacuum_df['Site'].unique()) == 1:
+                        _site = vacuum_df['Site'].iloc[0]
+                    _temp_series = get_hourly_temperature(days=_days, site=_site)
+                    if _temp_series is not None:
+                        _temp_series = _temp_series[
+                            (_temp_series['time'] >= data[timestamp_col].min()) &
+                            (_temp_series['time'] <= data[timestamp_col].max())
+                        ]
+                        if not _temp_series.empty:
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=_temp_series['time'],
+                                    y=_temp_series['temp'],
+                                    mode='lines',
+                                    name='Temp (F)',
+                                    line=dict(color='#999999', width=1,
+                                              dash='dot'),
+                                    yaxis='y3',
+                                    hovertemplate='%{y:.0f}°F<extra></extra>',
                                 )
-                                # Add freezing line
-                                fig.add_hline(
-                                    y=32, line_dash="dash",
-                                    line_color="lightblue", line_width=1,
-                                    annotation_text="32°F",
-                                    annotation_position="bottom right",
-                                    row=1, col=1, secondary_y=False,
-                                )
-                    except Exception:
-                        pass
+                            )
+                            # Add freezing line
+                            fig.add_hline(
+                                y=32, line_dash="dash",
+                                line_color="lightblue", line_width=1,
+                                annotation_text="32°F",
+                                annotation_position="bottom right",
+                                row=1, col=1, secondary_y=False,
+                            )
 
                     fig.update_layout(
                         height=300, margin=dict(t=30, b=30, l=50, r=50),

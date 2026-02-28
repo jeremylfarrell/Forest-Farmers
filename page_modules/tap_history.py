@@ -66,7 +66,7 @@ def _color_status(val):
 
 # ── Data loaders ───────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_historical_taps():
     """Load VT historical tap data from the committed Excel file."""
     possible_paths = [

@@ -291,7 +291,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         st.caption("Dot size reflects tap count")
 
     # Pre-compute freeze data for Freeze Alert mode and popups
-    from page_modules.vacuum import get_temperature_data
+    from utils.weather_api import get_temperature_data
     _freeze_temp_data = get_temperature_data(days=7)
     _freeze_drops = detect_freeze_event_drops(vacuum_df, _freeze_temp_data)
     _freeze_lookup = {}

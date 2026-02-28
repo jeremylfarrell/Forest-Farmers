@@ -12,7 +12,8 @@ from .helpers import (
     get_vacuum_column,
     get_releaser_column,
     extract_conductor_system,
-    is_tapping_job
+    is_tapping_job,
+    calculate_sap_flow_likelihood
 )
 
 from .geographic import (
@@ -26,7 +27,13 @@ from .geographic import (
 from .freeze_thaw import (
     get_current_freeze_thaw_status,
     detect_freeze_event_drops,
-    render_freeze_thaw_banner
+    render_freeze_thaw_banner,
+    add_freeze_bands_to_figure
+)
+
+from .weather_api import (
+    get_temperature_data,
+    get_hourly_temperature
 )
 
 __all__ = [
@@ -40,6 +47,7 @@ __all__ = [
     'format_percentage',
     'extract_conductor_system',
     'is_tapping_job',
+    'calculate_sap_flow_likelihood',
     # geographic
     'haversine_distance',
     'find_problem_clusters',
@@ -49,5 +57,9 @@ __all__ = [
     # freeze_thaw
     'get_current_freeze_thaw_status',
     'detect_freeze_event_drops',
-    'render_freeze_thaw_banner'
+    'render_freeze_thaw_banner',
+    'add_freeze_bands_to_figure',
+    # weather_api
+    'get_temperature_data',
+    'get_hourly_temperature',
 ]

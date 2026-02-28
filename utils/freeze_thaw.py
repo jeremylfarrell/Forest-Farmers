@@ -17,7 +17,7 @@ import config
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def get_current_freeze_thaw_status(latitude=43.4267, longitude=-73.7123):
+def get_current_freeze_thaw_status(latitude=None, longitude=None):
     """
     Fetch current weather and determine freeze/thaw status.
 
@@ -40,6 +40,11 @@ def get_current_freeze_thaw_status(latitude=43.4267, longitude=-73.7123):
     }
 
     try:
+        if latitude is None or longitude is None:
+            _coords = config.SITE_COORDINATES['NY']
+            latitude = _coords['lat']
+            longitude = _coords['lon']
+
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
             "latitude": latitude,
@@ -82,8 +87,8 @@ def get_current_freeze_thaw_status(latitude=43.4267, longitude=-73.7123):
         tomorrow_ft = (tomorrow_low is not None and tomorrow_high is not None and
                        tomorrow_low < freezing and tomorrow_high > freezing)
 
-        # Calculate sap flow score (reuse sap_forecast logic)
-        from page_modules.sap_forecast import calculate_sap_flow_likelihood
+        # Calculate sap flow score
+        from utils.helpers import calculate_sap_flow_likelihood
         sap_score = int(calculate_sap_flow_likelihood(
             today_high, today_low, 0, 0  # no precip/wind for quick check
         ))
@@ -252,6 +257,48 @@ def detect_freeze_event_drops(vacuum_df, temp_data, threshold_drop=None):
     result_df = pd.DataFrame(results)
     result_df = result_df.sort_values('Drop_Rate', ascending=False)
     return result_df
+
+
+def add_freeze_bands_to_figure(fig, temp_data, annotate=False):
+    """
+    Add vertical shaded bands to a Plotly figure for each freeze/thaw day.
+
+    A freeze/thaw day is one where Low < 32°F and High > 32°F.
+
+    Args:
+        fig: plotly.graph_objects.Figure to modify in-place
+        temp_data: DataFrame with columns Date, High, Low (from get_temperature_data())
+        annotate: If True, add a small "F/T" label on each band
+    """
+    if temp_data is None or 'Low' not in temp_data.columns:
+        return
+
+    import pandas as pd
+
+    freezing = config.FREEZING_POINT
+    for _, row in temp_data.iterrows():
+        t_high = row.get('High')
+        t_low = row.get('Low')
+        if t_high is None or t_low is None:
+            continue
+        if t_low < freezing and t_high > freezing:
+            d = row['Date']
+            if hasattr(d, 'date'):
+                d = d.date()
+            kwargs = dict(
+                x0=pd.Timestamp(d) - pd.Timedelta(hours=12),
+                x1=pd.Timestamp(d) + pd.Timedelta(hours=12),
+                fillcolor="rgba(100, 149, 237, 0.15)",
+                line_width=0,
+            )
+            if annotate:
+                kwargs.update(
+                    annotation_text="F/T",
+                    annotation_position="top left",
+                    annotation_font_size=9,
+                    annotation_font_color="cornflowerblue",
+                )
+            fig.add_vrect(**kwargs)
 
 
 def render_freeze_thaw_banner(freeze_status):

@@ -460,7 +460,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         with col_yes:
             if st.button("Yes, Approve", type="primary", use_container_width=True, key="confirm_yes_all"):
                 st.session_state.confirm_approve_all = False
-                _save_approved(edit_df)
+                _save_approved(edited_data)
         with col_no:
             if st.button("Cancel", use_container_width=True, key="confirm_no_all"):
                 st.session_state.confirm_approve_all = False

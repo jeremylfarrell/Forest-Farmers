@@ -9,10 +9,16 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+import config
+from utils.helpers import calculate_sap_flow_likelihood
 
 
-def get_weather_forecast(latitude=43.4267, longitude=-73.7123, days=10):
+def get_weather_forecast(latitude=None, longitude=None, days=10):
     """Get weather forecast from Open-Meteo API"""
+    if latitude is None or longitude is None:
+        _coords = config.SITE_COORDINATES['NY']
+        latitude = _coords['lat']
+        longitude = _coords['lon']
     try:
         url = "https://api.open-meteo.com/v1/forecast"
         params = {
@@ -52,51 +58,6 @@ def get_weather_forecast(latitude=43.4267, longitude=-73.7123, days=10):
         return None
 
 
-def calculate_sap_flow_likelihood(high, low, precip, wind):
-    """
-    Calculate likelihood of good sap flow based on weather conditions
-    
-    Returns score from 0-100 where:
-    - 0-30: Poor
-    - 30-50: Fair  
-    - 50-70: Good
-    - 70-100: Excellent
-    """
-    likelihood = 0
-    
-    # Freeze/thaw cycle (most important factor)
-    if low < 32 and high > 32:
-        likelihood += 40
-    elif low < 28:
-        likelihood += 10  # Frozen all day - some flow
-    
-    # Temperature swing
-    swing = high - low
-    if 15 <= swing <= 25:
-        likelihood += 30
-    elif 10 <= swing <= 30:
-        likelihood += 20
-    else:
-        likelihood += 10
-    
-    # Optimal temperatures
-    min_score = max(0, 20 - abs(low - 25) * 2)
-    max_score = max(0, 20 - abs(high - 45) * 2)
-    likelihood += (min_score + max_score) / 2
-    
-    # Precipitation penalty (heavy rain dilutes sap)
-    if precip > 0.5:
-        likelihood -= 10
-    elif precip > 0.25:
-        likelihood -= 5
-    
-    # Wind penalty (drying)
-    if wind > 20:
-        likelihood -= 5
-    
-    return max(0, min(100, likelihood))
-
-
 def render(vacuum_df, personnel_df):
     """Render sap flow forecast page with multi-site awareness"""
     
@@ -127,16 +88,18 @@ def render(vacuum_df, personnel_df):
         use_custom = st.checkbox("Use custom coordinates", value=False)
     
     if use_custom:
+        _default = config.SITE_COORDINATES['NY']
         col1, col2 = st.columns(2)
         with col1:
-            latitude = st.number_input("Latitude", value=43.4267, format="%.4f")
+            latitude = st.number_input("Latitude", value=_default['lat'], format="%.4f")
         with col2:
-            longitude = st.number_input("Longitude", value=-73.7123, format="%.4f")
+            longitude = st.number_input("Longitude", value=_default['lon'], format="%.4f")
     else:
-        # Default coordinates (Lake George area - between NY and VT operations)
-        latitude = 43.4267
-        longitude = -73.7123
-        st.caption(f"Using default coordinates: {latitude:.4f}°N, {longitude:.4f}°W (Lake George area)")
+        # Default to NY site coordinates
+        _coords = config.SITE_COORDINATES['NY']
+        latitude = _coords['lat']
+        longitude = _coords['lon']
+        st.caption(f"Using default coordinates: {latitude:.4f}°N, {longitude:.4f}°W ({_coords['name']})")
     
     st.divider()
     

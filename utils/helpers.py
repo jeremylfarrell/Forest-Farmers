@@ -182,3 +182,48 @@ def extract_conductor_system(mainline):
     # Fallback: letters before first digit (original behaviour)
     m2 = re.match(r'^([A-Z]{1,4})', name)
     return m2.group(1) if m2 else 'Unknown'
+
+
+def calculate_sap_flow_likelihood(high, low, precip, wind):
+    """
+    Calculate likelihood of good sap flow based on weather conditions.
+
+    Returns score from 0-100 where:
+    - 0-30: Poor
+    - 30-50: Fair
+    - 50-70: Good
+    - 70-100: Excellent
+    """
+    likelihood = 0
+
+    # Freeze/thaw cycle (most important factor)
+    if low < 32 and high > 32:
+        likelihood += 40
+    elif low < 28:
+        likelihood += 10  # Frozen all day - some flow
+
+    # Temperature swing
+    swing = high - low
+    if 15 <= swing <= 25:
+        likelihood += 30
+    elif 10 <= swing <= 30:
+        likelihood += 20
+    else:
+        likelihood += 10
+
+    # Optimal temperatures
+    min_score = max(0, 20 - abs(low - 25) * 2)
+    max_score = max(0, 20 - abs(high - 45) * 2)
+    likelihood += (min_score + max_score) / 2
+
+    # Precipitation penalty (heavy rain dilutes sap)
+    if precip > 0.5:
+        likelihood -= 10
+    elif precip > 0.25:
+        likelihood -= 5
+
+    # Wind penalty (drying)
+    if wind > 20:
+        likelihood -= 5
+
+    return max(0, min(100, likelihood))
