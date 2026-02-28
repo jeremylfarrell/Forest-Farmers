@@ -510,36 +510,19 @@ def merge_approved_data(raw_df, approved_df):
     raw['_merge_key'] = make_key(raw)
     approved['_merge_key'] = make_key(approved)
 
+    # Deduplicate approved rows — keep the most recently saved entry per key.
+    # Without this, duplicate sheet rows (from any prior save bug) all survive
+    # the isin() filter and appear as duplicate rows in the editor.
+    if 'Approved Date' in approved.columns:
+        approved = (
+            approved
+            .sort_values('Approved Date', ascending=True, na_position='first')
+            .drop_duplicates(subset='_merge_key', keep='last')
+        )
+    else:
+        approved = approved.drop_duplicates(subset='_merge_key', keep='last')
+
     approved_keys = set(approved['_merge_key'].values)
-
-    # --- Detect TSheets changes since approval ---
-    # Compare key numeric fields between raw and approved.
-    # If TSheets updated hours/taps after approval, flag for re-review.
-    compare_cols = ['Hours', 'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed']
-    compare_cols = [c for c in compare_cols if c in raw.columns and c in approved.columns]
-
-    tsheets_updated_keys = set()
-    if compare_cols:
-        # De-duplicate before comparison — keep first (latest) per key
-        raw_dedup = raw.drop_duplicates(subset='_merge_key', keep='first')
-        appr_dedup = approved.drop_duplicates(subset='_merge_key', keep='first')
-
-        raw_lookup = raw_dedup.set_index('_merge_key')[compare_cols]
-        approved_lookup = appr_dedup.set_index('_merge_key')[compare_cols]
-
-        common_keys = raw_lookup.index.intersection(approved_lookup.index)
-        if len(common_keys) > 0:
-            raw_vals = raw_lookup.loc[common_keys].fillna(0).round(2)
-            appr_vals = approved_lookup.loc[common_keys].fillna(0).round(2)
-            # Align columns to avoid comparison errors
-            appr_vals = appr_vals.reindex(columns=raw_vals.columns, fill_value=0)
-            # Flag rows where any numeric field differs by more than 0.01.
-            # Using np.isclose() instead of strict != to handle floating-point
-            # precision differences from the str() → Google Sheets → pd.to_numeric()
-            # round-trip.  Real TSheets changes (hours, taps) are always ≥ 0.25.
-            close = np.isclose(raw_vals.values, appr_vals.values, atol=0.01)
-            diffs = ~pd.Series(close.all(axis=1), index=raw_vals.index)
-            tsheets_updated_keys = set(diffs[diffs].index)
 
     raw_keys = set(raw['_merge_key'].values)
 
@@ -551,10 +534,9 @@ def merge_approved_data(raw_df, approved_df):
     # (i.e., approved data is CORRECTIONS, not additions)
     approved = approved[approved['_merge_key'].isin(raw_keys)].copy()
 
-    # Mark those with TSheets changes
-    approved['Approval Status'] = approved['_merge_key'].apply(
-        lambda k: 'TSheets Updated' if k in tsheets_updated_keys else 'Approved'
-    )
+    # Once approved, manager's data is canonical — TSheets changes do not
+    # override or re-flag approved rows.
+    approved['Approval Status'] = 'Approved'
 
     # Combine: pending raw rows + approved correction rows
     merged = pd.concat([pending_rows, approved], ignore_index=True)
@@ -619,6 +601,29 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                     if len(row) > max(emp_idx, date_idx):
                         key = f"{row[emp_idx]}|{row[date_idx]}"
                         row_map[key] = i
+
+        # --- Remove duplicate rows from the sheet (keep only latest per key) ---
+        # row_map[key] = last row number for that key. Any earlier row with the
+        # same key is orphaned — detect and delete them (in reverse order to avoid
+        # shifting row numbers during deletion).
+        if emp_idx is not None and date_idx is not None:
+            orphaned_rows = []
+            for i, _srow in enumerate(existing_data[1:], start=2):
+                if len(_srow) > max(emp_idx, date_idx):
+                    _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
+                    if _skey in row_map and row_map[_skey] != i:
+                        orphaned_rows.append(i)
+            if orphaned_rows:
+                for r in sorted(orphaned_rows, reverse=True):
+                    approved_ws.delete_rows(r)
+                # Rebuild row_map — row numbers shifted after deletions
+                existing_data = approved_ws.get_all_values()
+                row_map = {}
+                if existing_data and len(existing_data) > 1:
+                    for i, _srow in enumerate(existing_data[1:], start=2):
+                        if len(_srow) > max(emp_idx, date_idx):
+                            _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
+                            row_map[_skey] = i
 
         # Prepare data for writing
         cells_to_update = []

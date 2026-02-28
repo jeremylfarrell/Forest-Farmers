@@ -620,7 +620,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             # Per-status mainline. breakdown
             if _ml_col_r and 'Approval Status' in df.columns:
                 st.markdown("**`mainline.` by status:**")
-                for _status in ['Approved', 'TSheets Updated', 'Pending']:
+                for _status in ['Approved', 'Pending']:
                     _sub = df[df['Approval Status'] == _status]
                     if not _sub.empty:
                         _counts = (
@@ -631,7 +631,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
 
             # Sample APPROVED keys
             _approved_sample = (
-                df[df['Approval Status'].isin(['Approved', 'TSheets Updated'])].head(5)
+                df[df['Approval Status'] == 'Approved'].head(5)
                 if 'Approval Status' in df.columns else pd.DataFrame()
             )
             if not _approved_sample.empty:
