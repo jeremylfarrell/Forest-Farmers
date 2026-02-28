@@ -303,10 +303,12 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         ascending = [False] + [True] * (len(sort_cols) - 1)
         edit_df = edit_df.sort_values(sort_cols, ascending=ascending)
 
-    # Format dates for display (keep as strings for the editor)
+    # Format dates for display (keep as strings for the editor).
+    # Include the time component so the full datetime is preserved through
+    # the save round-trip — the emp|datetime merge key depends on it.
     if 'Date' in edit_df.columns:
         edit_df['Date'] = edit_df['Date'].apply(
-            lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
+            lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
         )
     for clock_col in ['Clock In', 'Clock Out']:
         if clock_col in edit_df.columns:
@@ -462,18 +464,24 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     )
 
     # Column configuration
+    # The merge key is now  Employee Name | DateTime  (two fields only).
+    # That means ALL other columns — including Job, mainline., Hours, Notes —
+    # are freely editable by the manager.  Employee Name and Date are disabled
+    # because they form the key: changing them here would break the match to
+    # the raw TSheets row.  Corrections to name or date must come from TSheets.
     column_config = {
-        'Employee Name': st.column_config.TextColumn('Employee', width='medium'),
-        'Date': st.column_config.TextColumn('Date', help='YYYY-MM-DD'),
+        'Employee Name': st.column_config.TextColumn(
+            'Employee', width='medium', disabled=True,
+            help='Part of the row key — cannot be edited here; correct in TSheets'
+        ),
+        'Date': st.column_config.TextColumn(
+            'Date / Time', disabled=True,
+            help='Date and time from TSheets — part of the row key, cannot be edited here'
+        ),
         'Hours': st.column_config.NumberColumn('Hours', min_value=0, max_value=24, step=0.25, format="%.2f"),
         'Rate': st.column_config.NumberColumn('Rate', min_value=0, step=0.5, format="%.2f"),
         'Job': st.column_config.TextColumn('Job', width='large'),
-        # mainline. is part of the merge key (emp|date|job|mainline) that
-        # matches raw rows to approved rows.  If a manager edits this value
-        # the saved key changes, the merge can no longer match it to the raw
-        # row, and the row stays Pending forever.  Treat it as read-only —
-        # corrections to mainline must come from TSheets (re-sync the data).
-        'mainline.': st.column_config.TextColumn('Mainline', width='medium', disabled=True),
+        'mainline.': st.column_config.TextColumn('Mainline', width='medium'),
         'Taps Put In': st.column_config.NumberColumn('Taps In', min_value=0, step=1, format="%d"),
         'Taps Removed': st.column_config.NumberColumn('Taps Out', min_value=0, step=1, format="%d"),
         'taps capped': st.column_config.NumberColumn('Capped', min_value=0, step=1, format="%d"),
@@ -662,6 +670,12 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
           new data for this row (e.g. hours or taps changed). The dashboard
           still uses your approved version, but you should re-review and
           re-approve to pick up the changes.
+
+        **What can be edited:**
+        - ✅ **Editable:** Hours, Rate, Job, Mainline, Taps, Notes, Site, Clock In/Out
+        - 🔒 **Read-only:** Employee Name and Date / Time — these form the row
+          identity key. If TSheets has the wrong name or date, fix it in TSheets
+          then click **🔄 Personnel** to re-sync.
 
         **Tips:**
         - Use the **Pending Review** filter to see only unapproved data

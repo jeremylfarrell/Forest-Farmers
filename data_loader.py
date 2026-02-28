@@ -494,25 +494,15 @@ def merge_approved_data(raw_df, approved_df):
             return result
 
     def make_key(df):
-        # IMPORTANT: fillna('') MUST come before astype(str).
-        # astype(str) converts float NaN to the literal string 'nan', after
-        # which fillna('') has no effect.  Swapping the order ensures NaN
-        # values become '' before string conversion, so empty-mainline raw
-        # rows and empty-mainline approved rows produce identical keys.
-        # .str.strip() removes invisible trailing spaces that TSheets can add.
-        emp = df['Employee Name'].fillna('').astype(str).str.strip()
-        date = df['Date'].dt.strftime('%Y-%m-%d').fillna('')
-        job = df['Job'].fillna('').astype(str).str.strip()
-        # Include mainline so that multiple entries per employee/date/job
-        # (different mainlines) are matched individually.
-        # Prefer 'mainline.' (with period) — matches the approved_personnel
-        # tab column name.  Fall back to any column containing 'mainline'.
-        ml_col = 'mainline.' if 'mainline.' in df.columns else next(
-            (c for c in df.columns if 'mainline' in c.lower()), None
-        )
-        ml = df[ml_col].fillna('').astype(str).str.strip() if ml_col \
-            else pd.Series('', index=df.index)
-        return emp + '|' + date + '|' + job + '|' + ml
+        # Key = Employee Name + full datetime (YYYY-MM-DD HH:MM).
+        # Including the time component means every TSheets clock-in entry is
+        # uniquely addressable without needing Job or mainline. in the key,
+        # so managers can freely edit those fields in the review editor.
+        # fillna('') before astype(str) prevents NaN → literal 'nan'.
+        # str.strip() removes invisible trailing whitespace from TSheets.
+        emp  = df['Employee Name'].fillna('').astype(str).str.strip()
+        date = df['Date'].dt.strftime('%Y-%m-%d %H:%M').fillna('')
+        return emp + '|' + date
 
     raw = raw_df.copy()
     approved = approved_df.copy()
@@ -612,29 +602,22 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                 approved_ws.update('A1', [approved_columns], value_input_option='USER_ENTERED')
                 existing_data = [approved_columns]
 
-        # Build key map for existing rows: (Employee Name|Date|Job|mainline) -> row number
+        # Build key map for existing rows: (Employee Name|DateTime) -> row number.
+        # Key is now just emp|datetime so that Job and mainline. can be freely
+        # edited in the manager review editor without breaking the lookup.
         row_map = {}
         if existing_data and len(existing_data) > 1:
             headers = existing_data[0]
             try:
-                emp_idx = headers.index('Employee Name')
+                emp_idx  = headers.index('Employee Name')
                 date_idx = headers.index('Date')
-                job_idx = headers.index('Job')
             except ValueError:
-                emp_idx = date_idx = job_idx = None
+                emp_idx = date_idx = None
 
-            # Find mainline column index
-            ml_idx = None
-            for hi, h in enumerate(headers):
-                if 'mainline' in h.lower():
-                    ml_idx = hi
-                    break
-
-            if all(idx is not None for idx in [emp_idx, date_idx, job_idx]):
+            if emp_idx is not None and date_idx is not None:
                 for i, row in enumerate(existing_data[1:], start=2):
-                    if len(row) > max(emp_idx, date_idx, job_idx):
-                        ml_val = row[ml_idx] if ml_idx is not None and ml_idx < len(row) else ''
-                        key = f"{row[emp_idx]}|{row[date_idx]}|{row[job_idx]}|{ml_val}"
+                    if len(row) > max(emp_idx, date_idx):
+                        key = f"{row[emp_idx]}|{row[date_idx]}"
                         row_map[key] = i
 
         # Prepare data for writing
@@ -642,19 +625,19 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
         rows_to_append = []
 
         for _, row in approved_df.iterrows():
-            # Build the key (must match the key format used in row_map above)
-            emp = str(row.get('Employee Name', ''))
+            # Build the key (must match the key format used in row_map above):
+            # Employee Name | DateTime (YYYY-MM-DD HH:MM).
+            # If the Date value is still a Timestamp (e.g. from the Excel
+            # upload path), format it with time included.  For the common
+            # case where it's already a string from the editor, str() is a
+            # no-op and the value is used as-is.
+            emp = str(row.get('Employee Name', '')).strip()
             date_val = row.get('Date', '')
             if isinstance(date_val, pd.Timestamp) and not pd.isna(date_val):
-                date_str = date_val.strftime('%Y-%m-%d')
+                date_str = date_val.strftime('%Y-%m-%d %H:%M')
             else:
-                date_str = str(date_val) if date_val else ''
-            job = str(row.get('Job', ''))
-            # Include mainline in key
-            ml_val = str(row.get('mainline.', row.get('mainline', '')))
-            if ml_val == 'nan' or ml_val is None:
-                ml_val = ''
-            key = f"{emp}|{date_str}|{job}|{ml_val}"
+                date_str = str(date_val).strip() if date_val else ''
+            key = f"{emp}|{date_str}"
 
             # Build the row values in column order
             row_values = []
@@ -663,7 +646,9 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                 if pd.isna(val) or val is None:
                     val = ''
                 elif isinstance(val, pd.Timestamp):
-                    if col in ('Clock In', 'Clock Out'):
+                    if col in ('Clock In', 'Clock Out', 'Date'):
+                        # Date is stored with time so the emp|datetime key
+                        # survives the sheet round-trip intact.
                         val = val.strftime('%Y-%m-%d %H:%M') if not pd.isna(val) else ''
                     else:
                         val = val.strftime('%Y-%m-%d') if not pd.isna(val) else ''
