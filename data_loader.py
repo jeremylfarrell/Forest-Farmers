@@ -604,27 +604,35 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
                         row_map[key] = i
 
         # --- Remove duplicate rows from the sheet (keep only latest per key) ---
-        # row_map[key] = last row number for that key. Any earlier row with the
-        # same key is orphaned — detect and delete them (in reverse order to avoid
-        # shifting row numbers during deletion).
+        # Detect duplicates first. If any found, rebuild the sheet in exactly
+        # 2 API calls (clear + update) rather than one delete_rows() per orphan
+        # — the latter causes 429 quota errors when many duplicates exist.
         if emp_idx is not None and date_idx is not None:
-            orphaned_rows = []
-            for i, _srow in enumerate(existing_data[1:], start=2):
-                if len(_srow) > max(emp_idx, date_idx):
-                    _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
-                    if _skey in row_map and row_map[_skey] != i:
-                        orphaned_rows.append(i)
-            if orphaned_rows:
-                for r in sorted(orphaned_rows, reverse=True):
-                    approved_ws.delete_rows(r)
-                # Rebuild row_map — row numbers shifted after deletions
-                existing_data = approved_ws.get_all_values()
+            has_dupes = any(
+                (len(_srow) > max(emp_idx, date_idx)
+                 and row_map.get(f"{_srow[emp_idx]}|{_srow[date_idx]}") != i)
+                for i, _srow in enumerate(existing_data[1:], start=2)
+            )
+            if has_dupes:
+                # Build deduplicated rows — iterate in order, last value per key wins.
+                seen: dict = {}
+                for _idx, _srow in enumerate(existing_data[1:]):
+                    if len(_srow) > max(emp_idx, date_idx):
+                        _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
+                    else:
+                        _skey = f"__nokey_{_idx}__"  # no usable key — keep as-is
+                    seen[_skey] = _srow  # dict assignment: later occurrence overwrites
+                clean_rows = [existing_data[0]] + list(seen.values())
+                # 2 API calls regardless of how many duplicates were removed
+                approved_ws.clear()
+                approved_ws.update('A1', clean_rows, value_input_option='USER_ENTERED')
+                # Rebuild row_map from the now-clean data
+                existing_data = clean_rows
                 row_map = {}
-                if existing_data and len(existing_data) > 1:
-                    for i, _srow in enumerate(existing_data[1:], start=2):
-                        if len(_srow) > max(emp_idx, date_idx):
-                            _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
-                            row_map[_skey] = i
+                for i, _srow in enumerate(existing_data[1:], start=2):
+                    if len(_srow) > max(emp_idx, date_idx):
+                        _skey = f"{_srow[emp_idx]}|{_srow[date_idx]}"
+                        row_map[_skey] = i
 
         # Prepare data for writing
         cells_to_update = []
