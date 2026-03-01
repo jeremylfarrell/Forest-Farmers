@@ -42,10 +42,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 min_date = datetime.now() - timedelta(days=30)
             if pd.isna(max_date):
                 max_date = datetime.now()
-            # Default end = yesterday so the range always covers "through the day before today"
-            _yesterday = (datetime.now() - timedelta(days=1)).date()
-            _max_d = max_date.date() if hasattr(max_date, 'date') else max_date
-            _end_default = min(_max_d, _yesterday)
+            # Default end = today; max_value = today so the picker is never
+            # capped at the last data date (which would block selecting today).
+            _today = datetime.now().date()
+            _end_default = _today
 
             # Smart default: start from the day after the last approval
             # so the manager sees only NEW data.  Fall back to full range
@@ -89,7 +89,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 "Date Range",
                 value=(default_start, _end_default),
                 min_value=min_date,
-                max_value=max_date,
+                max_value=_today,
                 key="mgr_review_dates"
             )
             if last_approval_label and not show_all:
