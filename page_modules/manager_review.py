@@ -306,7 +306,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     # the save round-trip — the emp|datetime merge key depends on it.
     if 'Date' in edit_df.columns:
         edit_df['Date'] = edit_df['Date'].apply(
-            lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
+            lambda x: x.strftime('%Y-%m-%d\n%H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
         )
     for clock_col in ['Clock In', 'Clock Out']:
         if clock_col in edit_df.columns:
@@ -320,6 +320,15 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     for col in ['Notes', 'Job', 'Employee Name', 'Site', 'mainline.']:
         if col in edit_df.columns:
             edit_df[col] = edit_df[col].fillna('').astype(str)
+
+    # Split "First Last" → "First\nLast" for compact 2-line display in the editor
+    if 'Employee Name' in edit_df.columns:
+        def _fmt_name(n):
+            if not isinstance(n, str) or not n.strip():
+                return n
+            parts = n.strip().rsplit(' ', 1)  # "Mary Jane Smith" → ["Mary Jane", "Smith"]
+            return '\n'.join(parts)
+        edit_df['Employee Name'] = edit_df['Employee Name'].apply(_fmt_name)
 
     # Ensure numeric columns are clean
     for col in ['Hours', 'Rate', 'Taps Put In', 'Taps Removed', 'taps capped', 'Repairs needed']:
@@ -469,36 +478,36 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     # the raw TSheets row.  Corrections to name or date must come from TSheets.
     column_config = {
         'Employee Name': st.column_config.TextColumn(
-            'Employee', width='medium', disabled=True,
+            'Employee', disabled=True,
             help='Part of the row key — cannot be edited here; correct in TSheets'
         ),
         'Date': st.column_config.TextColumn(
-            'Date / Time', disabled=True,
+            'Date / Time', width='small', disabled=True,
             help='Date and time from TSheets — part of the row key, cannot be edited here'
         ),
-        'Hours': st.column_config.NumberColumn('Hours', min_value=0, max_value=24, step=0.25, format="%.2f"),
-        'Rate': st.column_config.NumberColumn('Rate', min_value=0, step=0.5, format="%.2f"),
-        'Job': st.column_config.TextColumn('Job', width='large'),
-        'mainline.': st.column_config.TextColumn('Mainline', width='medium'),
-        'Taps Put In': st.column_config.NumberColumn('Taps In', min_value=0, step=1, format="%d"),
-        'Taps Removed': st.column_config.NumberColumn('Taps Out', min_value=0, step=1, format="%d"),
-        'taps capped': st.column_config.NumberColumn('Capped', min_value=0, step=1, format="%d"),
-        'Repairs needed': st.column_config.NumberColumn('Repairs', min_value=0, step=1, format="%d"),
+        'Hours': st.column_config.NumberColumn('Hours', width='small', min_value=0, max_value=24, step=0.25, format="%.2f"),
+        'Rate': st.column_config.NumberColumn('Rate', width='small', min_value=0, step=0.5, format="%.2f"),
+        'Job': st.column_config.TextColumn('Job', width='medium'),
+        'mainline.': st.column_config.TextColumn('Mainline', width='small'),
+        'Taps Put In': st.column_config.NumberColumn('Taps In', width='small', min_value=0, step=1, format="%d"),
+        'Taps Removed': st.column_config.NumberColumn('Taps Out', width='small', min_value=0, step=1, format="%d"),
+        'taps capped': st.column_config.NumberColumn('Capped', width='small', min_value=0, step=1, format="%d"),
+        'Repairs needed': st.column_config.NumberColumn('Repairs', width='small', min_value=0, step=1, format="%d"),
         'Notes': st.column_config.TextColumn('Notes', width='large'),
         'Site': st.column_config.SelectboxColumn(
-            'Site', options=['NY', 'VT', 'UNK'], required=True
+            'Site', width='small', options=['NY', 'VT', 'UNK'], required=True
         ),
-        'Clock In': st.column_config.TextColumn('Clock In', help='YYYY-MM-DD HH:MM'),
-        'Clock Out': st.column_config.TextColumn('Clock Out', help='YYYY-MM-DD HH:MM'),
+        'Clock In': st.column_config.TextColumn('Clock In', width='small', help='YYYY-MM-DD HH:MM'),
+        'Clock Out': st.column_config.TextColumn('Clock Out', width='small', help='YYYY-MM-DD HH:MM'),
         'Approved Date': st.column_config.TextColumn(
-            'Approved', disabled=True,
+            'Approved', width='small', disabled=True,
             help='When this row was last reviewed and approved'
         ),
         'Approved By': st.column_config.TextColumn(
-            'Approved By', disabled=True,
+            'Approved By', width='small', disabled=True,
             help='Who approved this row'
         ),
-        'Approval Status': st.column_config.TextColumn('Status', disabled=True,
+        'Approval Status': st.column_config.TextColumn('Status', width='small', disabled=True,
                                                          help='Set automatically on approval'),
     }
     # Disable any column not explicitly configured above (e.g. extra raw-data
@@ -508,12 +517,30 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         if _col not in column_config:
             column_config[_col] = st.column_config.TextColumn(_col, disabled=True)
 
+    # Enable text wrapping and taller rows in the underlying AG Grid.
+    # pre-wrap respects the \n characters we embedded in Date and Employee Name.
+    st.markdown("""
+<style>
+[data-testid="stDataEditor"] .ag-cell {
+    white-space: pre-wrap !important;
+    word-break: break-word !important;
+    line-height: 1.4 !important;
+    padding-top: 6px !important;
+    padding-bottom: 6px !important;
+}
+[data-testid="stDataEditor"] .ag-row {
+    height: auto !important;
+    min-height: 52px !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
     edited_data = st.data_editor(
         edit_df,
         column_config=column_config,
         use_container_width=True,
         hide_index=True,
-        height=min(500 + len(edit_df) * 5, 900),
+        height=min(60 + len(edit_df) * 55, 1200),
         key="manager_review_editor"
     )
 
