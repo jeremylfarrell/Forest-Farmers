@@ -328,6 +328,19 @@ def load_repairs_tracker(sheet_url, credentials_file):
         if 'Date Resolved' in df.columns:
             df['Date Resolved'] = pd.to_datetime(df['Date Resolved'], errors='coerce')
 
+        # AppSheet field-logging columns — parse gracefully if present.
+        # Location is stored as "lat, lon" by AppSheet's LatLong column type.
+        if 'Location' in df.columns:
+            _loc = df['Location'].str.extract(r'([+-]?\d+\.?\d*),\s*([+-]?\d+\.?\d*)')
+            df['Latitude'] = pd.to_numeric(_loc[0], errors='coerce')
+            df['Longitude'] = pd.to_numeric(_loc[1], errors='coerce')
+        for _col in ['Latitude', 'Longitude']:
+            if _col in df.columns:
+                df[_col] = pd.to_numeric(df[_col], errors='coerce')
+        for _col in ['Photo Found', 'Photo Resolved']:
+            if _col in df.columns:
+                df[_col] = df[_col].fillna('').astype(str)
+
         return df
 
     except Exception as e:
