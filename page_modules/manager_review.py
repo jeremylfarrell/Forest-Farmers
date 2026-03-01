@@ -194,7 +194,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
         status_filter_raw = st.radio(
             "Status",
             list(_status_opt_map.keys()),
-            index=0,
+            index=1,  # default to "Pending Review" so managers see what needs action
             key="mgr_review_status"
         )
         status_filter = _status_opt_map.get(status_filter_raw, "All")
@@ -524,17 +524,27 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     # ------------------------------------------------------------------
     st.markdown("")  # spacer
 
-    full_count = len(edit_df)
+    # Count how many rows in the current view still need approval.
+    # The button is only shown when there is something to do — hiding it
+    # when everything is already approved prevents accidental re-approvals.
+    _pending_in_view = (
+        int((edit_df['Approval Status'] == 'Pending').sum())
+        if 'Approval Status' in edit_df.columns
+        else len(edit_df)
+    )
 
     # Two-step approval: first click shows confirmation, second click saves
     if 'confirm_approve_all' not in st.session_state:
         st.session_state.confirm_approve_all = False
 
-    if not st.session_state.confirm_approve_all:
+    if _pending_in_view == 0:
+        st.success("✅ All rows in the current view are approved.")
+        st.session_state.confirm_approve_all = False  # reset if user had open confirmation
+    elif not st.session_state.confirm_approve_all:
         col_btn, col_info = st.columns([1, 2])
         with col_btn:
             if st.button(
-                f"✅ Approve All ({full_count})",
+                f"✅ Approve All ({_pending_in_view})",
                 type="primary",
                 use_container_width=True,
                 key="approve_all_btn"
@@ -543,11 +553,11 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 st.rerun()
         with col_info:
             st.caption(
-                f"This will save **{full_count}** rows as manager-approved."
+                f"This will save **{_pending_in_view}** pending rows as manager-approved."
             )
     else:
         st.warning(
-            f"**Are you sure?** This will approve **{full_count}** rows "
+            f"**Are you sure?** This will approve **{_pending_in_view}** pending rows "
             "matching your current filters and update the dashboard data."
         )
         col_yes, col_no, col_spacer = st.columns([1, 1, 2])
