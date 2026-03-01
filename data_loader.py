@@ -588,6 +588,7 @@ def save_approved_personnel(sheet_url, credentials_file, approved_df):
         # Key is now just emp|datetime so that Job and mainline. can be freely
         # edited in the manager review editor without breaking the lookup.
         row_map = {}
+        emp_idx = date_idx = None  # pre-init so orphan check below is safe if sheet is empty
         if existing_data and len(existing_data) > 1:
             headers = existing_data[0]
             try:
