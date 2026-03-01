@@ -42,6 +42,10 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
                 min_date = datetime.now() - timedelta(days=30)
             if pd.isna(max_date):
                 max_date = datetime.now()
+            # Default end = yesterday so the range always covers "through the day before today"
+            _yesterday = (datetime.now() - timedelta(days=1)).date()
+            _max_d = max_date.date() if hasattr(max_date, 'date') else max_date
+            _end_default = min(_max_d, _yesterday)
 
             # Smart default: start from the day after the last approval
             # so the manager sees only NEW data.  Fall back to full range
@@ -75,8 +79,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
             if _prev_show_all is not None and show_all != _prev_show_all:
                 _sd = min_date if show_all else smart_default
                 _sd = _sd.date() if hasattr(_sd, 'date') else _sd
-                _ed = max_date.date() if hasattr(max_date, 'date') else max_date
-                st.session_state["mgr_review_dates"] = (_sd, _ed)
+                st.session_state["mgr_review_dates"] = (_sd, _end_default)
             st.session_state["_mgr_show_all_prev"] = show_all
 
             if show_all:
@@ -84,7 +87,7 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
 
             date_range = st.date_input(
                 "Date Range",
-                value=(default_start, max_date),
+                value=(default_start, _end_default),
                 min_value=min_date,
                 max_value=max_date,
                 key="mgr_review_dates"
@@ -213,30 +216,25 @@ def render(personnel_df, vacuum_df=None, approved_df=None):
     # ------------------------------------------------------------------
     total_rows = len(filtered)
     if 'Approval Status' in filtered.columns:
-        approved_count = len(filtered[filtered['Approval Status'] == 'Approved'])
-        updated_count = len(filtered[filtered['Approval Status'] == 'TSheets Updated'])
-        pending_count = total_rows - approved_count - updated_count
+        approved_count = int((filtered['Approval Status'] == 'Approved').sum())
+        pending_count = int((filtered['Approval Status'] == 'Pending').sum())
     else:
         approved_count = 0
-        updated_count = 0
         pending_count = total_rows
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     with m1:
         st.metric("Total Rows", f"{total_rows:,}")
     with m2:
         st.metric("Pending", f"{pending_count:,}")
     with m3:
         st.metric("Approved", f"{approved_count:,}")
-    with m4:
-        st.metric("TSheets Updated", f"{updated_count:,}",
-                   help="Rows that were approved but TSheets data has since changed. Needs re-review.")
 
-    if updated_count > 0:
-        st.warning(
-            f"**{updated_count} row(s) changed in TSheets since approval.** "
-            "Use the **TSheets Updated** filter to review them. "
-            "Re-approve after reviewing to clear the flag."
+    if total_rows > 0:
+        _pct = approved_count / total_rows
+        st.progress(
+            _pct,
+            text=f"**{approved_count:,} of {total_rows:,} rows approved** ({_pct:.0%})"
         )
 
     st.divider()
