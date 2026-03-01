@@ -24,7 +24,7 @@ def get_week_start():
 def render(personnel_df, site_filter="All Sites"):
     """Render employee performance page with site tracking"""
 
-    st.title("👥 Employee Performance")
+    st.title("👥 Employee Hours")
 
     if personnel_df.empty:
         st.warning("No personnel data available")

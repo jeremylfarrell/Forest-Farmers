@@ -242,7 +242,10 @@ def render(personnel_df=None, vacuum_df=None):
         cs_agg['2026 Deleted'] = cs_agg['2026 Deleted'].fillna(0)
         # Net taps = put in minus deleted
         cs_agg['Net 2026'] = cs_agg['2026'] - cs_agg['2026 Deleted']
-        cs_agg['Diff (26 vs 25)'] = cs_agg['Net 2026'] - cs_agg[2025]
+        # Diff = total taps placed this season (put in + deleted trees) vs 2025.
+        # Deleted trees were tapped this season even though they were later removed,
+        # so they count toward taps placed.
+        cs_agg['Diff (26 vs 25)'] = cs_agg['2026'] + cs_agg['2026 Deleted'] - cs_agg[2025]
         cs_agg['% of 2025'] = ((cs_agg['Net 2026'] / cs_agg[2025]) * 100).round(1)
         cs_agg['% of 2025'] = cs_agg['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
         # Remaining accounts for deletions: need (2025 target - net taps) more
@@ -395,7 +398,11 @@ def render(personnel_df=None, vacuum_df=None):
         if has_2026:
             ml_display['2026 Deleted'] = ml_display['2026 Deleted'].fillna(0)
             ml_display['Net 2026'] = ml_display['2026'].fillna(0) - ml_display['2026 Deleted']
-            ml_display['Diff (26 vs 25)'] = (ml_display['Net 2026'] - ml_display[2025].fillna(0)).astype(int)
+            ml_display['Diff (26 vs 25)'] = (
+                ml_display['2026'].fillna(0)
+                + ml_display['2026 Deleted'].fillna(0)
+                - ml_display[2025].fillna(0)
+            ).astype(int)
             ml_display['% of 2025'] = ((ml_display['Net 2026'] / ml_display[2025].fillna(0)) * 100).round(1)
             ml_display['% of 2025'] = ml_display['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
         else:
@@ -514,6 +521,21 @@ def render(personnel_df=None, vacuum_df=None):
             }
             att_df['_sort'] = att_df['Status'].map(status_order).fillna(5)
             att_df = att_df.sort_values(['_sort', 'Remaining'], ascending=[True, False]).drop(columns='_sort')
+
+            # Let managers hide mainlines they know are done but lack TSheets data
+            _hide_key = "tap_attention_hidden"
+            _all_ml = att_df['Mainline'].tolist()
+            _hidden = st.multiselect(
+                "✅ Mark as resolved (hide from list):",
+                options=_all_ml,
+                default=[m for m in st.session_state.get(_hide_key, []) if m in _all_ml],
+                key=_hide_key,
+                help="Select mainlines that are complete but not yet in TSheets. "
+                     "Deselect to restore. Resets on page refresh.",
+            )
+            if _hidden:
+                att_df = att_df[~att_df['Mainline'].isin(_hidden)].copy()
+                st.caption(f"ℹ️ {len(_hidden)} mainline(s) hidden — deselect above to restore.")
 
             # Summary metrics by status
             col1, col2, col3, col4, col5 = st.columns(5)

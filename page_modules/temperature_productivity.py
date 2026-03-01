@@ -337,6 +337,19 @@ def render(personnel_df, vacuum_df=None):
     ).reset_index().sort_values('_join_date')
 
     if not timeline.empty:
+        # Build a complete-date temperature spine so the "all days" line is
+        # continuous and the "tapping days" line shows true gaps.
+        _temp_all = (
+            temp_df.groupby('_join_date', as_index=False)['Avg_Temp'].mean()
+            .sort_values('_join_date')
+        )
+        _temp_all = _temp_all.merge(
+            timeline[['_join_date', 'Taps']], on='_join_date', how='left'
+        )
+        _temp_all['Taps'] = _temp_all['Taps'].fillna(0)
+        # NaN on non-tapping days → Plotly draws a gap (connectgaps=False)
+        _temp_all['Temp_Tapping'] = _temp_all['Avg_Temp'].where(_temp_all['Taps'] > 0)
+
         fig_timeline = go.Figure()
 
         fig_timeline.add_trace(go.Bar(
@@ -347,12 +360,25 @@ def render(personnel_df, vacuum_df=None):
             opacity=0.7,
         ))
 
+        # Trace 1 — continuous grey line: sensor temp for every calendar day
         fig_timeline.add_trace(go.Scatter(
-            x=timeline['_join_date'],
-            y=timeline['Avg_Temp'],
-            name='Avg Temp (°F)',
+            x=_temp_all['_join_date'],
+            y=_temp_all['Avg_Temp'],
+            name='Sensor temp (all days)',
+            yaxis='y2',
+            mode='lines',
+            line=dict(color='#aaa', width=1, dash='dot'),
+            opacity=0.7,
+        ))
+
+        # Trace 2 — red line: temp only on tapping days, gaps elsewhere
+        fig_timeline.add_trace(go.Scatter(
+            x=_temp_all['_join_date'],
+            y=_temp_all['Temp_Tapping'],
+            name='Temp while tapping',
             yaxis='y2',
             mode='lines+markers',
+            connectgaps=False,
             marker=dict(size=4),
             line=dict(color='#d62728', width=2),
         ))
@@ -420,11 +446,12 @@ def render(personnel_df, vacuum_df=None):
         pivot = pivot.sort_values('Total Taps', ascending=False)
         pivot['Total Taps'] = pivot['Total Taps'].astype(int)
 
+        # Build a single format dict (chaining .format().format() causes the
+        # second call to override the first, leaving columns unformatted).
+        _pivot_fmt = {col: '{:.0f}' for col in pivot.columns if col not in ('Total Taps',)}
+        _pivot_fmt['Total Taps'] = '{:,.0f}'
         st.dataframe(
-            pivot.style.format({
-                col: '{:.1f}' for col in pivot.columns
-                if col not in ('Total Taps',)
-            }).format({'Total Taps': '{:,.0f}'}),
+            pivot.style.format(_pivot_fmt, na_rep='—'),
             use_container_width=True,
         )
         st.caption(

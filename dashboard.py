@@ -238,7 +238,7 @@ def render_sidebar():
             "Select Page",
             [
                 "🌳 Tapping Operations",
-                "👥 Employee Performance",
+                "👥 Employee Hours",
                 "🛠️ Repairs Needed",
                 "🌍 Interactive Map",
                 "📈 Tap History",
@@ -357,7 +357,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.32 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.33 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -520,7 +520,7 @@ def main():
         vacuum.render(vacuum_df, personnel_df)
     elif page == "🌳 Tapping Operations":
         tapping.render(personnel_df, vacuum_df)
-    elif page == "👥 Employee Performance":
+    elif page == "👥 Employee Hours":
         employees.render(personnel_df, site_filter)
     elif page == "⭐ Leak Checking":
         employee_effectiveness.render(personnel_df, vacuum_df)
