@@ -136,7 +136,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     else:
         _needs_gps = df  # no Location column yet — all need backfill
 
-    if not _needs_gps.empty and vacuum_df is not None and not vacuum_df.empty:
+    if not _needs_gps.empty:
         with st.expander(
             f"📍 Backfill GPS coordinates ({len(_needs_gps)} repair(s) without location)",
             expanded=False
@@ -148,15 +148,28 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 "not the exact repair spot, but close enough for map display)."
             )
 
-            _sensor_coords = _build_sensor_coords(vacuum_df)
+            # Also note: the repairs_tracker sheet must have a 'Location' column for
+            # the write to succeed. Add an empty 'Location' column to the sheet if it
+            # doesn't exist yet.
+            if 'Location' not in df.columns:
+                st.info("ℹ️ The repairs_tracker Google Sheet doesn't have a **Location** "
+                        "column yet. Add an empty 'Location' column to the sheet, "
+                        "then reload the page and try again.")
+
+            _sensor_coords = _build_sensor_coords(vacuum_df) if vacuum_df is not None and not vacuum_df.empty else {}
             _sensor_names  = list(_sensor_coords.keys())
+
+            if not _sensor_names:
+                st.warning("⚠️ No vacuum sensor coordinates found. Make sure vacuum data "
+                           "is loaded for this site (try selecting 'All Sites' from the "
+                           "site filter, then switch back to your site).")
 
             _preview_rows = []
             for _, rep in _needs_gps.iterrows():
                 ml = str(rep.get('Mainline', '')).strip()
                 if not ml or ml == 'nan':
                     continue
-                matched = match_mainline_to_sensor(ml, _sensor_names)
+                matched = match_mainline_to_sensor(ml, _sensor_names) if _sensor_names else None
                 if matched:
                     _preview_rows.append({
                         'Repair ID':      rep.get('Repair ID', ''),
@@ -165,10 +178,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                         'Location':       _sensor_coords[matched],
                     })
 
-            if not _preview_rows:
-                st.info("No sensor coordinates could be matched for these repairs. "
-                        "Check that vacuum sensor data is loaded for this site.")
-            else:
+            if _sensor_names and not _preview_rows:
+                st.info("No sensor coordinates could be matched to any of these repairs. "
+                        "Check that the mainline names in the repairs sheet match sensor names.")
+            elif _preview_rows:
                 _preview_df = pd.DataFrame(_preview_rows)
                 st.caption(
                     f"**{len(_preview_df)}** of **{len(_needs_gps)}** repairs "
