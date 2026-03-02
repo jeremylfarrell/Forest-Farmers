@@ -292,7 +292,19 @@ def render(personnel_df=None, vacuum_df=None):
             display_cs[int_col] = display_cs[int_col].astype(int)
         display_cs['%'] = display_cs['%'].apply(lambda x: f"{x:.1f}%")
 
-        st.dataframe(display_cs, use_container_width=True, hide_index=True, height=500)
+        _cs_col_cfg = {
+            'Conductor System': st.column_config.TextColumn(width='medium'),
+            '2025':      st.column_config.NumberColumn(width='small'),
+            '2026':      st.column_config.NumberColumn(width='small'),
+            'Del':       st.column_config.NumberColumn(width='small'),
+            'Net 2026':  st.column_config.NumberColumn(width='small'),
+            'Diff':      st.column_config.NumberColumn(width='small'),
+            '%':         st.column_config.TextColumn(width='small'),
+            'Remaining': st.column_config.NumberColumn(width='small'),
+        }
+        st.dataframe(display_cs, column_config=_cs_col_cfg,
+                     use_container_width=True, hide_index=True,
+                     height=min(38 + len(display_cs) * 36, 500))
 
         # Horizontal bar chart: % of 2025 by conductor system (uses Net 2026)
         chart_data = cs_agg[['Conductor System', '% of 2025']].copy()
@@ -333,7 +345,8 @@ def render(personnel_df=None, vacuum_df=None):
         display_cs['Change (24-25)'] = display_cs['Change (24-25)'].fillna(0).astype(int)
         display_cs['% Change'] = display_cs['% Change'].apply(lambda x: f"{x:+.1f}%")
 
-        st.dataframe(display_cs, use_container_width=True, hide_index=True, height=500)
+        st.dataframe(display_cs, use_container_width=True, hide_index=True,
+                     height=min(38 + len(display_cs) * 36, 500))
 
     st.divider()
 
@@ -453,11 +466,12 @@ def render(personnel_df=None, vacuum_df=None):
             ml_display = ml_display[[c for c in col_order if c in ml_display.columns]]
 
         # Apply color-coded styling to Status column
+        _ml_height = min(38 + len(ml_display) * 36, 500)
         if has_2026 and 'Status' in ml_display.columns:
             styled_ml = ml_display.style.map(_color_status, subset=['Status'])
-            st.dataframe(styled_ml, use_container_width=True, hide_index=True, height=400)
+            st.dataframe(styled_ml, use_container_width=True, hide_index=True, height=_ml_height)
         else:
-            st.dataframe(ml_display, use_container_width=True, hide_index=True, height=400)
+            st.dataframe(ml_display, use_container_width=True, hide_index=True, height=_ml_height)
 
     st.divider()
 
@@ -561,7 +575,8 @@ def render(personnel_df=None, vacuum_df=None):
 
             # Apply color-coded styling to Status column
             styled_att = att_df.style.map(_color_status, subset=['Status'])
-            st.dataframe(styled_att, use_container_width=True, hide_index=True, height=500)
+            st.dataframe(styled_att, use_container_width=True, hide_index=True,
+                         height=min(38 + len(att_df) * 36, 500))
         else:
             st.success("All mainlines with 2025 data are progressing in 2026!")
     else:
@@ -618,7 +633,8 @@ def render(personnel_df=None, vacuum_df=None):
                 increases = len(flagged_df[flagged_df['Flag'].str.contains('increase|New', case=False)])
                 st.metric("Increases / New", increases)
 
-            st.dataframe(flagged_df, use_container_width=True, hide_index=True, height=500)
+            st.dataframe(flagged_df, use_container_width=True, hide_index=True,
+                         height=min(38 + len(flagged_df) * 36, 500))
         else:
             st.success(f"No mainlines with >{variance_pct}% variance between 2024 and 2025")
 

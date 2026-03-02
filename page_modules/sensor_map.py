@@ -206,8 +206,9 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         latest = vacuum_df.groupby(sensor_col).first().reset_index()
 
     # Filter out birch sensors (start with lowercase 'b') and relays/inactive
-    # (sensors not matching pattern: 2-4 uppercase letters followed by a number)
-    valid_sensor_pattern = r'^[A-Z]{2,4}\d'
+    # (sensors not matching pattern: 1-4 uppercase letters followed by a number)
+    # NOTE: 1-letter prefix required for Matthews sensors (M01, M02…)
+    valid_sensor_pattern = r'^[A-Z]{1,4}\d'
     latest = latest[
         (~latest[sensor_col].str.startswith('b', na=False)) &
         (latest[sensor_col].str.match(valid_sensor_pattern, na=False))
