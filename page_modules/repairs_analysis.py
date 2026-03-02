@@ -726,9 +726,9 @@ def _build_sensor_coords(vacuum_df):
     coords = {}
     if vacuum_df is None or vacuum_df.empty:
         return coords
-    sensor_col = find_column(vacuum_df, 'Sensor', 'sensor', 'mainline.')
-    lat_col    = find_column(vacuum_df, 'Latitude', 'lat')
-    lon_col    = find_column(vacuum_df, 'Longitude', 'lon')
+    sensor_col = find_column(vacuum_df, 'Name', 'name', 'mainline', 'Sensor Name', 'sensor', 'location')
+    lat_col    = find_column(vacuum_df, 'Latitude', 'latitude', 'lat')
+    lon_col    = find_column(vacuum_df, 'Longitude', 'longitude', 'lon', 'long')
     if not all([sensor_col, lat_col, lon_col]):
         return coords
     latest = vacuum_df.groupby(sensor_col).first().reset_index()
