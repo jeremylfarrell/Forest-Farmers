@@ -9,47 +9,10 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 import config
-from utils import find_column, get_vacuum_column
+from utils import find_column, get_vacuum_column, match_mainline_to_sensor
 from utils.freeze_thaw import get_current_freeze_thaw_status, detect_freeze_event_drops
 import re
 import math
-
-
-def match_mainline_to_sensor(mainline, sensor_names):
-    """
-    Match a mainline name to the closest sensor name.
-    Uses progressive matching: exact → case-insensitive exact → same prefix+number.
-
-    Args:
-        mainline: Mainline name from personnel data (e.g., "RHAS13")
-        sensor_names: List of sensor names from vacuum data
-
-    Returns:
-        Best matching sensor name or None
-    """
-    if pd.isna(mainline) or not mainline:
-        return None
-
-    mainline = str(mainline).strip().upper()
-
-    # Try exact match first (case-insensitive)
-    for sensor in sensor_names:
-        if str(sensor).strip().upper() == mainline:
-            return sensor
-
-    # Try partial match — but only if one fully contains the other AND
-    # the shorter string is at least 3 chars (avoids single-letter mismatches)
-    for sensor in sensor_names:
-        sensor_upper = str(sensor).strip().upper()
-        if len(mainline) >= 3 and len(sensor_upper) >= 3:
-            if mainline in sensor_upper or sensor_upper in mainline:
-                return sensor
-
-    # NOTE: We deliberately do NOT fall back to alpha-only matching (e.g.
-    # matching "LHW" prefix to any "LHW*" sensor) because that causes taps
-    # from LHW1, LHW2, etc. to all pile up on a single LHW0 sensor.
-
-    return None
 
 
 def get_taps_details_by_mainline(personnel_df):

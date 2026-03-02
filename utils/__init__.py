@@ -13,7 +13,8 @@ from .helpers import (
     get_releaser_column,
     extract_conductor_system,
     is_tapping_job,
-    calculate_sap_flow_likelihood
+    calculate_sap_flow_likelihood,
+    match_mainline_to_sensor,
 )
 
 from .geographic import (
@@ -48,6 +49,7 @@ __all__ = [
     'extract_conductor_system',
     'is_tapping_job',
     'calculate_sap_flow_likelihood',
+    'match_mainline_to_sensor',
     # geographic
     'haversine_distance',
     'find_problem_clusters',

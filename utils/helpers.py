@@ -227,3 +227,33 @@ def calculate_sap_flow_likelihood(high, low, precip, wind):
         likelihood -= 5
 
     return max(0, min(100, likelihood))
+
+
+def match_mainline_to_sensor(mainline, sensor_names):
+    """
+    Match a mainline name to the closest sensor name.
+    Uses progressive matching: exact (case-insensitive) → substring (≥3 chars).
+    Returns the best matching sensor name, or None if no match found.
+
+    Args:
+        mainline: Mainline name from personnel/repairs data (e.g. 'DMA05')
+        sensor_names: Iterable of sensor names from vacuum/map data
+
+    Returns:
+        Matching sensor name string or None
+    """
+    import pandas as pd
+    if pd.isna(mainline) or not mainline:
+        return None
+    mainline = str(mainline).strip().upper()
+    # Exact match (case-insensitive)
+    for sensor in sensor_names:
+        if str(sensor).strip().upper() == mainline:
+            return sensor
+    # Substring match — only when both strings are ≥3 chars to avoid spurious hits
+    for sensor in sensor_names:
+        sensor_upper = str(sensor).strip().upper()
+        if len(mainline) >= 3 and len(sensor_upper) >= 3:
+            if mainline in sensor_upper or sensor_upper in mainline:
+                return sensor
+    return None

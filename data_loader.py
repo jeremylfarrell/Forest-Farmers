@@ -422,6 +422,64 @@ def save_repairs_updates(sheet_url, credentials_file, updated_df):
         return False, f"Error saving: {e}"
 
 
+def save_repair_locations(sheet_url, credentials_file, locations_df):
+    """
+    Write GPS Location strings back to the repairs_tracker tab for repairs
+    that currently have no location data.
+
+    locations_df must have columns: ['Repair ID', 'Location']
+    where Location is a "lat, lon" string (e.g. "44.234567, -72.891234").
+    Only rows where both Repair ID matches and Location is non-empty are written.
+    """
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        tracker_ws = next(
+            (ws for ws in sheet.worksheets()
+             if ws.title.strip().lower() == 'repairs_tracker'),
+            None
+        )
+        if tracker_ws is None:
+            return False, "repairs_tracker tab not found"
+
+        raw = tracker_ws.get_all_values()
+        if not raw:
+            return False, "No data in repairs_tracker"
+
+        headers = raw[0]
+        if 'Repair ID' not in headers:
+            return False, "Repair ID column not found in sheet"
+        if 'Location' not in headers:
+            return False, "Location column not found in sheet — add it first"
+
+        repair_id_col = headers.index('Repair ID')
+        location_col  = headers.index('Location')
+
+        row_map = {
+            row[repair_id_col]: i
+            for i, row in enumerate(raw[1:], start=2)
+            if repair_id_col < len(row)
+        }
+
+        cells = []
+        for _, r in locations_df.iterrows():
+            rid = str(r.get('Repair ID', '')).strip()
+            loc = str(r.get('Location', '')).strip()
+            if rid and rid in row_map and loc:
+                cells.append(gspread.Cell(row_map[rid], location_col + 1, loc))
+
+        if not cells:
+            return False, "No matching rows to update"
+
+        tracker_ws.update_cells(cells, value_input_option='USER_ENTERED')
+        load_repairs_tracker.clear()
+        return True, f"GPS location written for {len(cells)} repair(s)"
+
+    except Exception as e:
+        return False, f"Error saving locations: {e}"
+
+
 # ===========================================================================
 # APPROVED PERSONNEL DATA (Manager Data Review workflow)
 # ===========================================================================

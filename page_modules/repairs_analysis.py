@@ -11,9 +11,9 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 
-from data_loader import save_repairs_updates
+from data_loader import save_repairs_updates, save_repair_locations
 from metrics import calculate_repair_cost_breakdown
-from utils import extract_conductor_system
+from utils import extract_conductor_system, find_column, match_mainline_to_sensor
 
 
 def render(personnel_df, vacuum_df=None, repairs_df=None):
@@ -125,6 +125,75 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         )
         for c in ['Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']:
             df[c] = df[c].fillna(0)
+
+    st.divider()
+
+    # --- GPS Backfill ---
+    # For repairs logged via TSheets (no AppSheet GPS), approximate their location
+    # using the matching vacuum sensor's coordinates and write back to Google Sheets.
+    if 'Location' in df.columns:
+        _needs_gps = df[df['Location'].isna() | (df['Location'].astype(str).str.strip() == '')]
+    else:
+        _needs_gps = df  # no Location column yet — all need backfill
+
+    if not _needs_gps.empty and vacuum_df is not None and not vacuum_df.empty:
+        with st.expander(
+            f"📍 Backfill GPS coordinates ({len(_needs_gps)} repair(s) without location)",
+            expanded=False
+        ):
+            st.markdown(
+                "These repairs were logged via TSheets and have no GPS location. "
+                "The dashboard can approximate their location using the nearest "
+                "**vacuum sensor coordinates** (sensor position on the mainline — "
+                "not the exact repair spot, but close enough for map display)."
+            )
+
+            _sensor_coords = _build_sensor_coords(vacuum_df)
+            _sensor_names  = list(_sensor_coords.keys())
+
+            _preview_rows = []
+            for _, rep in _needs_gps.iterrows():
+                ml = str(rep.get('Mainline', '')).strip()
+                if not ml or ml == 'nan':
+                    continue
+                matched = match_mainline_to_sensor(ml, _sensor_names)
+                if matched:
+                    _preview_rows.append({
+                        'Repair ID':      rep.get('Repair ID', ''),
+                        'Mainline':       ml,
+                        'Matched Sensor': matched,
+                        'Location':       _sensor_coords[matched],
+                    })
+
+            if not _preview_rows:
+                st.info("No sensor coordinates could be matched for these repairs. "
+                        "Check that vacuum sensor data is loaded for this site.")
+            else:
+                _preview_df = pd.DataFrame(_preview_rows)
+                st.caption(
+                    f"**{len(_preview_df)}** of **{len(_needs_gps)}** repairs "
+                    f"matched to a sensor — {len(_needs_gps) - len(_preview_df)} "
+                    f"could not be matched (no sensor data for their mainline)."
+                )
+                st.dataframe(_preview_df, use_container_width=True, hide_index=True,
+                             height=min(38 + len(_preview_df) * 36, 300))
+
+                if st.button("📍 Write GPS to Google Sheets", type="primary",
+                             key="backfill_gps"):
+                    _loc_df = _preview_df[['Repair ID', 'Location']].copy()
+                    _sheet_url = _get_sheet_url()
+                    if not _sheet_url:
+                        st.error("Could not find sheet URL in configuration")
+                    else:
+                        with st.spinner("Writing coordinates to Google Sheets…"):
+                            _ok, _msg = save_repair_locations(
+                                _sheet_url, 'credentials.json', _loc_df
+                            )
+                        if _ok:
+                            st.success(f"✅ {_msg}")
+                            st.rerun()
+                        else:
+                            st.error(_msg)
 
     st.divider()
 
@@ -617,21 +686,14 @@ def _auto_complete_repairs(repairs_df, personnel_df):
     return auto_count
 
 
-def _save_edits(edited_df):
-    """Save edits back to Google Sheets"""
-    if 'Repair ID' not in edited_df.columns:
-        st.error("Cannot save: Repair ID column missing")
-        return
-
+def _get_sheet_url():
+    """Return the PERSONNEL_SHEET_URL from secrets or .env."""
     sheet_url = None
-    credentials_file = 'credentials.json'
-
     try:
         if hasattr(st, 'secrets') and 'sheets' in st.secrets:
             sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
     except (KeyError, FileNotFoundError):
         pass
-
     if not sheet_url:
         try:
             import os
@@ -640,10 +702,47 @@ def _save_edits(edited_df):
             sheet_url = os.getenv('PERSONNEL_SHEET_URL')
         except ImportError:
             pass
+    return sheet_url
+
+
+def _build_sensor_coords(vacuum_df):
+    """
+    Build a dict of {sensor_name: 'lat, lon'} from the vacuum DataFrame.
+    Uses the latest reading per sensor and skips sensors with zero/null coords.
+    """
+    coords = {}
+    if vacuum_df is None or vacuum_df.empty:
+        return coords
+    sensor_col = find_column(vacuum_df, 'Sensor', 'sensor', 'mainline.')
+    lat_col    = find_column(vacuum_df, 'Latitude', 'lat')
+    lon_col    = find_column(vacuum_df, 'Longitude', 'lon')
+    if not all([sensor_col, lat_col, lon_col]):
+        return coords
+    latest = vacuum_df.groupby(sensor_col).first().reset_index()
+    for _, row in latest.iterrows():
+        try:
+            lat = float(row[lat_col])
+            lon = float(row[lon_col])
+            if lat != 0 and lon != 0 and not pd.isna(lat) and not pd.isna(lon):
+                coords[str(row[sensor_col]).strip()] = f"{lat:.6f}, {lon:.6f}"
+        except (ValueError, TypeError):
+            pass
+    return coords
+
+
+def _save_edits(edited_df):
+    """Save edits back to Google Sheets"""
+    if 'Repair ID' not in edited_df.columns:
+        st.error("Cannot save: Repair ID column missing")
+        return
+
+    sheet_url = _get_sheet_url()
 
     if not sheet_url:
         st.error("Could not find sheet URL in configuration")
         return
+
+    credentials_file = 'credentials.json'
 
     with st.spinner("Saving changes to Google Sheets..."):
         success, message = save_repairs_updates(sheet_url, credentials_file, edited_df)
