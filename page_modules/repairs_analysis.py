@@ -178,7 +178,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             editor_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
                            'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
             editor_cols = [c for c in editor_cols if c in open_repairs.columns]
-            for _photo_col in ['Photo Found', 'Photo Resolved']:
+            for _photo_col in ['Photo Found', 'Photo Resolved', 'Video Found']:
                 if _photo_col in open_repairs.columns:
                     editor_cols.append(_photo_col)
 
@@ -216,6 +216,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 'Photo Resolved': st.column_config.LinkColumn(
                     '📷 Fixed', display_text='View', disabled=True,
                     help='Photo taken after repair was completed'
+                ),
+                'Video Found': st.column_config.LinkColumn(
+                    '🎥 Video', display_text='View', disabled=True,
+                    help='Video recorded when repair was reported'
                 ),
             }
 
@@ -295,7 +299,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             if 'Fix_Cost' in completed.columns:
                 detail_cols.extend(['Fix_Cost', 'Cost_Per_Tap'])
             detail_cols = [c for c in detail_cols if c in completed.columns]
-            for _photo_col in ['Photo Found', 'Photo Resolved']:
+            for _photo_col in ['Photo Found', 'Photo Resolved', 'Video Found']:
                 if _photo_col in completed.columns:
                     detail_cols.append(_photo_col)
 
@@ -323,6 +327,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 _comp_col_cfg['Photo Resolved'] = st.column_config.LinkColumn(
                     '📷 Fixed', display_text='View', help='Photo taken after repair was completed'
                 )
+            if 'Video Found' in comp_display.columns:
+                _comp_col_cfg['Video Found'] = st.column_config.LinkColumn(
+                    '🎥 Video', display_text='View', help='Video recorded when repair was reported'
+                )
             st.dataframe(comp_display, column_config=_comp_col_cfg or None,
                          use_container_width=True, hide_index=True, height=500)
 
@@ -330,7 +338,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 comp_edit_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
                                   'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
                 comp_edit_cols = [c for c in comp_edit_cols if c in completed.columns]
-                for _photo_col in ['Photo Found', 'Photo Resolved']:
+                for _photo_col in ['Photo Found', 'Photo Resolved', 'Video Found']:
                     if _photo_col in completed.columns:
                         comp_edit_cols.append(_photo_col)
                 comp_edit = completed[comp_edit_cols].copy()
@@ -365,6 +373,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     'Photo Resolved': st.column_config.LinkColumn(
                         '📷 Fixed', display_text='View', disabled=True,
                         help='Photo taken after repair was completed'
+                    ),
+                    'Video Found': st.column_config.LinkColumn(
+                        '🎥 Video', display_text='View', disabled=True,
+                        help='Video recorded when repair was reported'
                     ),
                 }
 
