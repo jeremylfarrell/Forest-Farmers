@@ -920,7 +920,7 @@ def _render_repairs_map_from_tracker(repairs_df, map_data, map_style, tiles, att
     # Legend
     legend_html = '''
     <div style="position: fixed;
-                top: 10px; right: 10px; width: 180px; height: auto;
+                top: 10px; right: 10px; width: 200px; height: auto;
                 background-color: white; border:2px solid grey; z-index:9999;
                 font-size:14px; padding: 10px; border-radius: 5px;">
     <p style="margin: 0; font-weight: bold; text-align: center;">Repair Status</p>
@@ -928,6 +928,8 @@ def _render_repairs_map_from_tracker(repairs_df, map_data, map_style, tiles, att
     <p style="margin: 5px 0;"><span style="color: #f39c12; font-size: 20px;">&#9679;</span> Deferred</p>
     <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> Completed</p>
     <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Repairs</p>
+    <p style="margin: 5px 0; border-top: 1px solid #ddd; padding-top: 5px; font-size: 12px; color: #555;">
+      &#9898; White border = exact GPS pin<br>&#9679; Solid = sensor area</p>
     </div>
     '''
     m2.get_root().html.add_child(folium.Element(legend_html))
@@ -1066,6 +1068,50 @@ def _render_repairs_map_from_tracker(repairs_df, map_data, map_style, tiles, att
             fillOpacity=0.8,
             weight=2
         ).add_to(m2)
+
+    # ── Exact GPS pins for AppSheet-logged repairs ──────────────────────
+    # Repairs logged via AppSheet carry Latitude/Longitude from the Location
+    # LatLong column (parsed in data_loader). Plot them at their precise field
+    # location with a white border so they stand out from sensor-area pins.
+    if 'Latitude' in display_df.columns and 'Longitude' in display_df.columns:
+        gps_repairs = display_df.dropna(subset=['Latitude', 'Longitude'])
+        gps_repairs = gps_repairs[gps_repairs['Latitude'].abs() > 0]
+        for _, rep in gps_repairs.iterrows():
+            _status = str(rep.get('Status', '')).title()
+            _gps_color = ('#e74c3c' if _status == 'Open'
+                          else '#f39c12' if _status == 'Deferred'
+                          else '#27ae60')
+            # Build popup
+            _desc = str(rep.get('Description', ''))[:100]
+            _found_by = str(rep.get('Found By', '')) if pd.notna(rep.get('Found By')) else ''
+            _date_found = ''
+            if pd.notna(rep.get('Date Found')):
+                try:
+                    _date_found = rep['Date Found'].strftime('%m/%d/%y')
+                except Exception:
+                    _date_found = str(rep.get('Date Found', ''))[:10]
+            _photo_html = ''
+            _photo_url = str(rep.get('Photo Found', '')).strip()
+            if _photo_url and _photo_url not in ('', 'nan'):
+                _photo_html = f'<br><a href="{_photo_url}" target="_blank">📷 View Photo</a>'
+            _popup_body = (
+                f"<b>{rep.get('Repair ID', '')}</b><br>"
+                f"{_desc}<br>"
+                f"Found: {_date_found}"
+                + (f" by {_found_by}" if _found_by else "")
+                + f"<br>Status: <b>{_status}</b>{_photo_html}"
+            )
+            folium.CircleMarker(
+                location=[rep['Latitude'], rep['Longitude']],
+                radius=8,
+                color='white',
+                weight=2,
+                fill=True,
+                fill_color=_gps_color,
+                fill_opacity=0.9,
+                popup=folium.Popup(_popup_body, max_width=250),
+                tooltip=f"🔧 {rep.get('Mainline', '')} — {_status}",
+            ).add_to(m2)
 
     st_folium(m2, width=None, height=600, returned_objects=[])
 

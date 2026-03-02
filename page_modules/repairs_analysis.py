@@ -178,6 +178,9 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             editor_cols = ['Repair ID', 'Date Found', 'Age (Days)', 'Mainline', 'Description',
                            'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
             editor_cols = [c for c in editor_cols if c in open_repairs.columns]
+            for _photo_col in ['Photo Found', 'Photo Resolved']:
+                if _photo_col in open_repairs.columns:
+                    editor_cols.append(_photo_col)
 
             edit_df = open_repairs[editor_cols].copy()
 
@@ -206,6 +209,14 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 'Resolved By': st.column_config.TextColumn('Resolved By'),
                 'Repair Cost': st.column_config.TextColumn('Repair Cost', help='Approx cost to fix (e.g. 45.50)'),
                 'Notes': st.column_config.TextColumn('Notes', width='medium'),
+                'Photo Found': st.column_config.LinkColumn(
+                    '📷 Photo', display_text='View', disabled=True,
+                    help='Photo taken when repair was reported'
+                ),
+                'Photo Resolved': st.column_config.LinkColumn(
+                    '📷 Fixed', display_text='View', disabled=True,
+                    help='Photo taken after repair was completed'
+                ),
             }
 
             edited_open = st.data_editor(
@@ -284,6 +295,9 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             if 'Fix_Cost' in completed.columns:
                 detail_cols.extend(['Fix_Cost', 'Cost_Per_Tap'])
             detail_cols = [c for c in detail_cols if c in completed.columns]
+            for _photo_col in ['Photo Found', 'Photo Resolved']:
+                if _photo_col in completed.columns:
+                    detail_cols.append(_photo_col)
 
             comp_display = completed[detail_cols].copy()
             if 'Date Found' in comp_display.columns:
@@ -300,12 +314,25 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
             comp_display = comp_display.sort_values('Date Resolved' if 'Date Resolved' in comp_display.columns else 'Date Found',
                                                      ascending=False)
 
-            st.dataframe(comp_display, use_container_width=True, hide_index=True, height=500)
+            _comp_col_cfg = {}
+            if 'Photo Found' in comp_display.columns:
+                _comp_col_cfg['Photo Found'] = st.column_config.LinkColumn(
+                    '📷 Photo', display_text='View', help='Photo taken when repair was reported'
+                )
+            if 'Photo Resolved' in comp_display.columns:
+                _comp_col_cfg['Photo Resolved'] = st.column_config.LinkColumn(
+                    '📷 Fixed', display_text='View', help='Photo taken after repair was completed'
+                )
+            st.dataframe(comp_display, column_config=_comp_col_cfg or None,
+                         use_container_width=True, hide_index=True, height=500)
 
             with st.expander("Edit completed repairs (re-open, change details)"):
                 comp_edit_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
                                   'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
                 comp_edit_cols = [c for c in comp_edit_cols if c in completed.columns]
+                for _photo_col in ['Photo Found', 'Photo Resolved']:
+                    if _photo_col in completed.columns:
+                        comp_edit_cols.append(_photo_col)
                 comp_edit = completed[comp_edit_cols].copy()
 
                 if 'Date Found' in comp_edit.columns:
@@ -331,6 +358,14 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     'Resolved By': st.column_config.TextColumn('Resolved By'),
                     'Repair Cost': st.column_config.TextColumn('Repair Cost', help='Approx cost to fix'),
                     'Notes': st.column_config.TextColumn('Notes', width='medium'),
+                    'Photo Found': st.column_config.LinkColumn(
+                        '📷 Photo', display_text='View', disabled=True,
+                        help='Photo taken when repair was reported'
+                    ),
+                    'Photo Resolved': st.column_config.LinkColumn(
+                        '📷 Fixed', display_text='View', disabled=True,
+                        help='Photo taken after repair was completed'
+                    ),
                 }
 
                 edited_comp = st.data_editor(
