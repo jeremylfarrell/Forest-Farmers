@@ -4,7 +4,7 @@
 
 Streamlit dashboard for a maple syrup operation. Monitors vacuum systems, tracks employee productivity, and manages tapping operations across two sites: **New York (NY)** and **Vermont (VT)**. Deployed on Streamlit Cloud, auto-deploys from `main` branch.
 
-**Current version: v9.17** (shown in sidebar footer of `dashboard.py`)
+**Current version: v9.41** (shown in sidebar footer of `dashboard.py`)
 
 ## Architecture
 
@@ -24,7 +24,7 @@ Each page module has a `render()` function called by `dashboard.py`. Data is fil
 |------|---------|
 | `dashboard.py` | Entry point: auth, site picker, sidebar nav, page routing |
 | `config.py` | All thresholds, colors, site coords, sugarbush mapping (edit here, not in page modules) |
-| `data_loader.py` | Google Sheets loading with `@st.cache_data(ttl=3600)` (~970 lines) |
+| `data_loader.py` | Google Sheets loading with `@st.cache_data(ttl=3600)`; `save_repairs_updates()`, `save_repair_locations()` (~970 lines) |
 | `metrics.py` | Metric calculation helpers |
 | `styling.py` | Custom CSS (maple/brown theme) |
 | `verify_setup.py` | Setup verification script |
@@ -33,9 +33,11 @@ Each page module has a `render()` function called by `dashboard.py`. Data is fil
 
 | Module | Purpose |
 |--------|---------|
-| `helpers.py` | `find_column()`, `is_tapping_job()`, `extract_conductor_system()`, formatters, column finders |
+| `helpers.py` | `find_column()`, `is_tapping_job()`, `extract_conductor_system()`, `calculate_sap_flow_likelihood()`, `match_mainline_to_sensor()`, formatters |
 | `geographic.py` | Haversine distance, clustering helpers |
-| `freeze_thaw.py` | Freeze/thaw status detection and banner rendering |
+| `freeze_thaw.py` | `get_current_freeze_thaw_status()`, `detect_freeze_event_drops()`, `render_freeze_thaw_banner()`, `add_freeze_bands_to_figure()` |
+| `weather_api.py` | `get_temperature_data()`, `get_hourly_temperature()` — centralized Open-Meteo API calls |
+| `__init__.py` | Re-exports all utils for `from utils import ...` |
 
 ### Page Modules (`page_modules/`)
 
@@ -44,8 +46,8 @@ Each page module has a `render()` function called by `dashboard.py`. Data is fil
 |--------|---------------|-------------|
 | `tapping.py` | Tapping Operations | Season progress, daily taps by employee pivot, site-wide efficiency |
 | `employees.py` | Employee Performance | Overtime watch (52h), hours by state, individual detail |
-| `repairs_analysis.py` | Repairs Needed | Interactive repairs tracker with `st.data_editor`, conductor system grouping |
-| `sensor_map.py` | Interactive Map | Folium map with tap-count-scaled dots, repairs attention map (~1,280 lines) |
+| `repairs_analysis.py` | Repairs Needed | `st.data_editor` repairs tracker; AppSheet photo/video `LinkColumn`s; GPS backfill expander writes `Location` to Google Sheets |
+| `sensor_map.py` | Interactive Map | Folium map with tap-count-scaled sensor dots + exact-GPS AppSheet repair pins (white border); M-line sensors supported (~1,280 lines) |
 | `tap_history.py` | Tap History | Year-over-year tap comparisons |
 | `temperature_productivity.py` | Tapping by Temperature | Tapping productivity vs temperature (Open-Meteo API) |
 | `freezing_report.py` | Freezing Report | Per-conductor freeze analysis + PDF export (~660 lines) |
@@ -87,6 +89,7 @@ The 2-4 letter prefix before the number in a mainline name. E.g., `DMA5` → con
 ### Google Sheets Structure
 - **Vacuum sheets** (separate for NY and VT): Monthly tabs named like "January 2025", plus an `all` tab
 - **Personnel sheet**: Tabs: `all` (TSheets data), `approved_personnel` (manager-reviewed), `repairs_tracker`, `Alerts_Notes`
+  - **repairs_tracker** columns: `Repair ID`, `Mainline`, `Status`, `Location` (lat,lon string — written by dashboard GPS backfill or AppSheet `HERE()`), photo/video URL columns
 
 ### Personnel Data Columns
 - `Employee Name`, `Date`, `Hours`, `Rate`
@@ -121,6 +124,8 @@ The 2-4 letter prefix before the number in a mainline name. E.g., `DMA5` → con
 - **TSheets Updated detection**: Uses `np.isclose(atol=0.01)` for float comparison
 - **New shared utilities** go in `utils/helpers.py` and get exported via `utils/__init__.py`
 - **New page modules** must be added to both `page_modules/__init__.py` imports and `dashboard.py` routing
+- **Sensor column name matching**: When using `find_column()` for lat/lon in vacuum data, use the same variants as `sensor_map.py`: `find_column(df, 'Latitude', 'latitude', 'lat')` and `find_column(df, 'Longitude', 'longitude', 'lon', 'long')`
+- **Hiding columns without breaking save logic**: Use `column_order=[...]` on `st.data_editor` / `st.dataframe` to hide a column from view while keeping it in the underlying DataFrame — do NOT remove the column from the data when downstream code (e.g. save logic) needs it
 
 ### Manager Approval Workflow
 Raw TSheets data → Manager Data Review page → corrections → `approved_personnel` tab → `merge_approved_data()` joins raw + approved with change detection
@@ -153,10 +158,15 @@ Update `st.caption(f"v9.XX | ...")` in `dashboard.py` `render_sidebar()` functio
 - Folium maps: use `returned_objects=[]` in `st_folium()` to prevent rerun on every click
 - Page render() param order varies — some take `(vacuum_df, personnel_df)`, others `(personnel_df, vacuum_df)`. Check the function signature.
 - `st.cache_data` ttl is 3600 seconds (1 hour) — `config.CACHE_TIMEOUT` matches this
+- Sensor name regex for map filtering uses `^[A-Z]{1,4}\d` (1–4 uppercase letters then a digit) — do NOT use `{2,4}`, which silently excludes single-letter prefixes like Matthews sensors (`M01`, `M02`)
 
 ## Deferred Work (Not Yet Done)
 - Splitting large files: `sensor_map.py` (~1,280 lines), `vacuum.py` (~995 lines), `data_loader.py` (~970 lines)
 - Adding type hints across the codebase
 - Adding unit tests
-- Extract shared `calculate_sap_likelihood()` from vacuum.py / freezing_report.py
-- Extract shared `add_freeze_bands_to_figure()` from vacuum.py / freezing_report.py
+
+## Completed Refactoring (for reference)
+- ✅ `calculate_sap_flow_likelihood()` — extracted to `utils/helpers.py`
+- ✅ `add_freeze_bands_to_figure()` — extracted to `utils/freeze_thaw.py`
+- ✅ `get_temperature_data()` / `get_hourly_temperature()` — extracted to `utils/weather_api.py`
+- ✅ `match_mainline_to_sensor()` — extracted to `utils/helpers.py`
