@@ -109,8 +109,13 @@ def render(personnel_df, vacuum_df):
     st.divider()
     st.subheader("🎯 Tapping Progress")
 
-    def _render_tap_progress(tap_df, site_label, target):
+    def _render_tap_progress(tap_df, site_label, target, site_code='ALL'):
         """Render progress bar and estimate for one site"""
+        # Read tapping-complete state from session
+        complete_key = f"tap_complete_{site_code}"
+        date_key = f"tap_complete_date_{site_code}"
+        is_complete = st.session_state.get(complete_key, False)
+
         taps_installed = int(tap_df['Taps_In'].sum())
         pct = min(taps_installed / target, 1.0) if target > 0 else 0
         remaining = max(target - taps_installed, 0)
@@ -136,11 +141,36 @@ def render(personnel_df, vacuum_df):
         with c1:
             st.metric("Installed / Target", f"{taps_installed:,} / {target:,}")
         with c2:
-            st.metric("% Complete", f"{pct*100:.1f}%")
+            pct_label = "% Taps vs Last Year" if is_complete else "% Complete"
+            st.metric(pct_label, f"{pct*100:.1f}%")
         with c3:
             st.metric("Avg Taps/Day (7d)", f"{avg_per_day:,.0f}" if avg_per_day > 0 else "N/A")
         with c4:
-            st.metric("Est. Completion", est_date)
+            if is_complete:
+                stored_date = st.session_state.get(date_key, "")
+                st.metric("Date Tapping Completed", stored_date if stored_date else "—")
+            else:
+                st.metric("Est. Completion", est_date)
+
+        # Manager control: mark tapping as complete
+        with st.expander("⚙️ Manager: Mark Tapping Complete"):
+            checked = st.checkbox(
+                "Tapping complete for this site",
+                value=is_complete,
+                key=complete_key,
+                help="Check when all tapping is done. Est. Completion is replaced with the completion date."
+            )
+            if checked:
+                try:
+                    default_date = datetime.strptime(st.session_state[date_key], '%b %d, %Y').date()
+                except (KeyError, ValueError):
+                    default_date = datetime.now().date()
+                chosen = st.date_input(
+                    "Date tapping completed",
+                    value=default_date,
+                    key=f"tap_date_input_{site_code}"
+                )
+                st.session_state[date_key] = chosen.strftime('%b %d, %Y')
 
     tap_targets = config.TAP_TARGETS
     viewing_all = has_site and len(df['Site'].unique()) > 1
@@ -150,18 +180,18 @@ def render(personnel_df, vacuum_df):
         col_ny, col_vt = st.columns(2)
         with col_ny:
             ny_df = df[df['Site'] == 'NY'] if 'Site' in df.columns else df
-            _render_tap_progress(ny_df, "🟦 New York", tap_targets.get("NY", 0))
+            _render_tap_progress(ny_df, "🟦 New York", tap_targets.get("NY", 0), site_code="NY")
         with col_vt:
             vt_df = df[df['Site'] == 'VT'] if 'Site' in df.columns else df
-            _render_tap_progress(vt_df, "🟩 Vermont", tap_targets.get("VT", 0))
+            _render_tap_progress(vt_df, "🟩 Vermont", tap_targets.get("VT", 0), site_code="VT")
     elif has_site and len(df['Site'].unique()) == 1:
         site_code = df['Site'].iloc[0]
         site_label = "🟦 New York" if site_code == "NY" else "🟩 Vermont" if site_code == "VT" else site_code
-        _render_tap_progress(df, site_label, tap_targets.get(site_code, 0))
+        _render_tap_progress(df, site_label, tap_targets.get(site_code, 0), site_code=site_code)
     else:
         # No site info — use combined target
         combined_target = sum(tap_targets.values())
-        _render_tap_progress(df, "All Sites", combined_target)
+        _render_tap_progress(df, "All Sites", combined_target, site_code="ALL")
 
     # SITE-WIDE EFFICIENCY METRICS (tapping job codes only)
     st.divider()

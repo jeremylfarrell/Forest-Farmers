@@ -177,6 +177,9 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         (latest[sensor_col].str.match(valid_sensor_pattern, na=False))
     ]
 
+    # Also exclude relay-only and non-mainline sensors defined in config
+    latest = latest[~latest[sensor_col].apply(config.is_excluded_sensor)]
+
     # Clean data
     map_data = latest[[sensor_col, lat_col, lon_col]].copy()
     if vacuum_col:

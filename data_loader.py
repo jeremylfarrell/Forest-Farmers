@@ -341,6 +341,29 @@ def load_repairs_tracker(sheet_url, credentials_file):
             if _col in df.columns:
                 df[_col] = df[_col].fillna('').astype(str)
 
+        # ── Infer 'Site' column if not already present ─────────────────────
+        # repairs_tracker may not include a Site column.  We infer it from the
+        # Mainline prefix using config.CONDUCTOR_TO_SUGARBUSH (VT conductors).
+        # Any repair whose mainline prefix appears in the VT sugarbush map is
+        # tagged as 'VT'; everything else defaults to 'NY'.
+        if 'Site' not in df.columns and 'Mainline' in df.columns:
+            try:
+                import config as _cfg
+                _vt_prefixes = set(_cfg.CONDUCTOR_TO_SUGARBUSH.keys())
+
+                def _infer_site(mainline):
+                    if not mainline or str(mainline).strip() in ('', 'nan'):
+                        return 'Unknown'
+                    ml = str(mainline).strip().upper()
+                    for length in range(min(len(ml), 5), 0, -1):
+                        if ml[:length] in _vt_prefixes:
+                            return 'VT'
+                    return 'NY'
+
+                df['Site'] = df['Mainline'].apply(_infer_site)
+            except Exception:
+                pass  # leave without Site column if config import fails
+
         return df
 
     except Exception as e:

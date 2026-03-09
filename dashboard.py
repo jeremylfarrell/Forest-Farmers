@@ -357,7 +357,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.41 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.44 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -504,6 +504,23 @@ def main():
     # Filter by site (based on login selection)
     vacuum_df, personnel_df, repairs_df = filter_data_by_site(vacuum_df, personnel_df, repairs_df, site_filter)
 
+    # Separate approved-only personnel rows for analysis pages.
+    # All raw TSheets rows start as 'Pending' until reviewed in Manager Data Review.
+    # Analysis pages only see 'Approved' rows so worker mistakes don't skew reports.
+    # Manager Data Review still receives the full merged dataset (pending + approved).
+    if 'Approval Status' in personnel_df.columns:
+        pending_count = int((personnel_df['Approval Status'] == 'Pending').sum())
+        approved_only_df = personnel_df[personnel_df['Approval Status'] == 'Approved'].copy()
+    else:
+        pending_count = 0
+        approved_only_df = personnel_df
+
+    # Pre-process repairs (auto-complete + mainline refresh) so the Interactive Map
+    # and Repairs Needed page both draw from the same resolved dataset.
+    # Uses approved-only data so only verified TSheets entries auto-complete repairs.
+    from page_modules.repairs_analysis import preprocess_repairs
+    repairs_df = preprocess_repairs(repairs_df, approved_only_df)
+
     # Show filtering info at top of page
     sensor_col = find_column(vacuum_df, 'Sensor Name', 'sensor', 'mainline', 'location', 'name', 'Name')
     if not vacuum_df.empty and sensor_col:
@@ -515,33 +532,42 @@ def main():
         else:
             st.success(f"📊 **All Sites View** - {sensor_count} sensors combined | Last {days_to_load} days")
 
-    # Route to selected page
+    # Warn when TSheets entries are awaiting manager review
+    if pending_count > 0:
+        st.warning(
+            f"⚠️ **{pending_count} TSheets entr{'y' if pending_count == 1 else 'ies'} pending approval.** "
+            f"Analysis pages show only approved data. Go to 📋 **Manager Data Review** to review and approve."
+        )
+
+    # Route to selected page.
+    # NOTE: All analysis pages receive approved_only_df (manager-approved rows only).
+    #       Manager Data Review receives the full personnel_df to show pending entries.
     if page == "🔧 Vacuum Performance":
-        vacuum.render(vacuum_df, personnel_df)
+        vacuum.render(vacuum_df, approved_only_df)
     elif page == "🌳 Tapping Operations":
-        tapping.render(personnel_df, vacuum_df)
+        tapping.render(approved_only_df, vacuum_df)
     elif page == "👥 Employee Hours":
-        employees.render(personnel_df, site_filter)
+        employees.render(approved_only_df, site_filter)
     elif page == "⭐ Leak Checking":
-        employee_effectiveness.render(personnel_df, vacuum_df)
+        employee_effectiveness.render(approved_only_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
-        maintenance.render(vacuum_df, personnel_df)
+        maintenance.render(vacuum_df, approved_only_df)
     elif page == "🛠️ Repairs Needed":
-        repairs_analysis.render(personnel_df, vacuum_df, repairs_df)
+        repairs_analysis.render(approved_only_df, vacuum_df, repairs_df)
     elif page == "⚠️ Alerts":
-        data_quality.render(personnel_df, vacuum_df)
+        data_quality.render(approved_only_df, vacuum_df)
     elif page == "🌍 Interactive Map":
-        sensor_map.render(vacuum_df, personnel_df, repairs_df)
+        sensor_map.render(vacuum_df, approved_only_df, repairs_df)
     elif page == "🌡️ Sap Flow Forecast":
-        sap_forecast.render(vacuum_df, personnel_df)
+        sap_forecast.render(vacuum_df, approved_only_df)
     elif page == "📊 Raw Data":
-        raw_data.render(vacuum_df, personnel_df)
+        raw_data.render(vacuum_df, approved_only_df)
     elif page == "📈 Tap History":
-        tap_history.render(personnel_df, vacuum_df)
+        tap_history.render(approved_only_df, vacuum_df)
     elif page == "🌡️ Tapping by Temperature":
-        temperature_productivity.render(personnel_df, vacuum_df)
+        temperature_productivity.render(approved_only_df, vacuum_df)
     elif page == "🧊 Freezing Report":
-        freezing_report.render(vacuum_df, personnel_df)
+        freezing_report.render(vacuum_df, approved_only_df)
     elif page == "📋 Manager Data Review":
         manager_review.render(personnel_df, vacuum_df, approved_df)
 

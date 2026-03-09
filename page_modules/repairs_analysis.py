@@ -29,12 +29,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         )
         return
 
+    # dashboard.py calls preprocess_repairs() before routing here, so
+    # mainline refresh, status normalisation, and auto-complete have already
+    # run on repairs_df.  We only need to add display-only derived columns.
     df = repairs_df.copy()
-
-    # --- Refresh mainline names from latest personnel data ---
-    # If a worker entered the wrong mainline and later corrected it in TSheets
-    # (or the manager approved a correction), update the repair record to match.
-    df = _refresh_mainlines_from_personnel(df, personnel_df)
 
     # Calculate age for open repairs
     if 'Date Found' in df.columns:
@@ -42,27 +40,13 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     else:
         df['Age (Days)'] = 0
 
-    # Normalize status values
-    if 'Status' in df.columns:
-        df['Status'] = df['Status'].str.strip().str.title()
-        df['Status'] = df['Status'].replace({'': 'Open'})
-    else:
-        df['Status'] = 'Open'
-
-    # Add conductor system column
+    # Add conductor system column (display helper — not persisted)
     if 'Mainline' in df.columns:
         df['Conductor System'] = df['Mainline'].apply(extract_conductor_system)
 
     # Ensure Repair Cost column exists
     if 'Repair Cost' not in df.columns:
         df['Repair Cost'] = ''
-
-    # --- Auto-complete repairs from TSheets ---
-    # If someone clocked into a mainline with a "Fixing Identified Tubing Issues"
-    # job code AFTER the repair was found, auto-mark it as Completed.
-    auto_completed = _auto_complete_repairs(df, personnel_df)
-    if auto_completed > 0:
-        st.info(f"Auto-completed **{auto_completed}** repair(s) based on TSheets 'Fixing Identified Tubing Issues' entries.")
 
     # --- Summary Metrics ---
     st.subheader("Summary")
@@ -320,9 +304,10 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
         st.divider()
 
-        # Charts for open repairs
+        # ── Open Repairs charts ──────────────────────────────────────────────
         open_all = df[df['Status'] == 'Open']
         if not open_all.empty:
+            st.subheader("Open Repairs")
             chart_col1, chart_col2 = st.columns(2)
 
             with chart_col1:
@@ -347,6 +332,50 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     fig.update_layout(height=max(300, len(by_reporter) * 30 + 100),
                                       showlegend=False, coloraxis_showscale=False)
                     st.plotly_chart(fig, use_container_width=True)
+
+        # ── Completed Repairs charts ─────────────────────────────────────────
+        completed_all = df[df['Status'] == 'Completed']
+        if not completed_all.empty:
+            st.divider()
+            st.subheader("Completed Repairs")
+            chart_col1, chart_col2 = st.columns(2)
+
+            with chart_col1:
+                st.subheader("By Conductor System")
+                if 'Conductor System' in completed_all.columns:
+                    comp_by_system = completed_all.groupby('Conductor System').size().reset_index(name='Count')
+                    if not comp_by_system.empty:
+                        comp_by_system = comp_by_system.sort_values('Count', ascending=True)
+                        fig = px.bar(comp_by_system, x='Count', y='Conductor System', orientation='h',
+                                     color='Count', color_continuous_scale=['#4CAF50', '#1B5E20'])
+                        fig.update_layout(height=max(300, len(comp_by_system) * 30 + 100),
+                                          showlegend=False, coloraxis_showscale=False)
+                        st.plotly_chart(fig, use_container_width=True)
+
+            with chart_col2:
+                st.subheader("By Fixer")
+                st.caption("Employees who clocked 'Fixing Identified Tubing Issues' for this repair")
+                # Build fixer list from personnel_df "Fixing Identified Tubing Issues" entries
+                fixer_counts = _get_fixer_counts(personnel_df)
+                if not fixer_counts.empty:
+                    fixer_counts = fixer_counts.sort_values('Count', ascending=True)
+                    fig = px.bar(fixer_counts, x='Count', y='Employee', orientation='h',
+                                 color='Count', color_continuous_scale=['#66BB6A', '#1B5E20'])
+                    fig.update_layout(height=max(300, len(fixer_counts) * 30 + 100),
+                                      showlegend=False, coloraxis_showscale=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                elif 'Resolved By' in completed_all.columns:
+                    # Fallback: use Resolved By field
+                    by_fixer = completed_all[completed_all['Resolved By'].notna() &
+                                             (completed_all['Resolved By'].astype(str).str.strip() != '')
+                                             ].groupby('Resolved By').size().reset_index(name='Count')
+                    if not by_fixer.empty:
+                        by_fixer = by_fixer.sort_values('Count', ascending=True)
+                        fig = px.bar(by_fixer, x='Count', y='Resolved By', orientation='h',
+                                     color='Count', color_continuous_scale=['#66BB6A', '#1B5E20'])
+                        fig.update_layout(height=max(300, len(by_fixer) * 30 + 100),
+                                          showlegend=False, coloraxis_showscale=False)
+                        st.plotly_chart(fig, use_container_width=True)
 
     # ==========================================
     # TAB 2: COMPLETED REPAIRS
@@ -557,6 +586,48 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
         update the keyword lists in `metrics.py → calculate_repair_cost_breakdown()`
         and `repairs_analysis.py → _auto_complete_repairs()`.
         """)
+
+
+def preprocess_repairs(repairs_df, personnel_df):
+    """
+    Public function: apply mainline refresh and auto-complete to repairs_df.
+    Call this in dashboard.py before passing repairs_df to any page module
+    so the Repairs page and Interactive Map use identical data.
+    Returns a new processed DataFrame (does not mutate the input).
+    """
+    if repairs_df is None or repairs_df.empty:
+        return repairs_df
+    df = repairs_df.copy()
+    df = _refresh_mainlines_from_personnel(df, personnel_df)
+    if 'Status' in df.columns:
+        df['Status'] = df['Status'].str.strip().str.title()
+        df['Status'] = df['Status'].replace({'': 'Open'})
+    else:
+        df['Status'] = 'Open'
+    _auto_complete_repairs(df, personnel_df)
+    return df
+
+
+def _get_fixer_counts(personnel_df):
+    """Return a DataFrame with Employee / Count for 'Fixing Identified Tubing Issues' job entries."""
+    from utils import find_column
+    empty = pd.DataFrame(columns=['Employee', 'Count'])
+    if personnel_df is None or personnel_df.empty:
+        return empty
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode')
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'name')
+    if not job_col or not emp_col:
+        return empty
+    fixing_keywords = ['fixing identified tubing', 'already identified tubing issue']
+    mask = personnel_df[job_col].astype(str).str.lower().apply(
+        lambda j: any(kw in j for kw in fixing_keywords)
+    )
+    fixers = personnel_df[mask]
+    if fixers.empty:
+        return empty
+    counts = fixers.groupby(emp_col).size().reset_index(name='Count')
+    counts.columns = ['Employee', 'Count']
+    return counts
 
 
 def _refresh_mainlines_from_personnel(repairs_df, personnel_df):
