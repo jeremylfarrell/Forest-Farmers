@@ -173,13 +173,7 @@ def render(vacuum_df, personnel_df):
         if matching:
             for c in sorted(matching):
                 conductor_options.append(f"{bush_name} — {c}")
-    # Add any conductors not in sugarbush map
-    mapped = set()
-    for bush_conds in config.SUGARBUSH_MAP.values():
-        mapped.update(bush_conds)
-    for c in conductors:
-        if c not in mapped:
-            conductor_options.append(f"Other — {c}")
+    # Conductors not in the sugarbush map are likely typos or excluded sensors — omit them
 
     selected = st.selectbox(
         "Conductor System",
@@ -207,11 +201,21 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
     rows = []
     for cond in conductors:
         cdf = latest[latest['Conductor'] == cond]
+        sugarbush = config.get_sugarbush(cond)
+        if sugarbush == 'Other':
+            continue  # skip typo / excluded-sensor conductors
         frozen = len(cdf[cdf['Freeze_Status'] == 'FROZEN'])
         critical = len(cdf[cdf['Freeze_Status'] == 'Critical'])
         total = len(cdf)
         total_taps = cdf['Taps'].sum()
-        sugarbush = config.get_sugarbush(cond)
+
+        # Most-recent sensor reading for this conductor (detects gateway outages)
+        last_update = '—'
+        if timestamp_col in cdf.columns:
+            ts = pd.to_datetime(cdf[timestamp_col], errors='coerce').dropna()
+            if not ts.empty:
+                last_update = ts.max().strftime('%m/%d %H:%M')
+
         rows.append({
             'Sugarbush': sugarbush,
             'Conductor': cond,
@@ -220,6 +224,7 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
             'Critical (>10")': critical,
             'Priority Lines': frozen + critical,
             'Total Taps': total_taps,
+            'Last Update': last_update,
         })
 
     overview_df = pd.DataFrame(rows)

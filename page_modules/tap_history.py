@@ -242,14 +242,12 @@ def render(personnel_df=None, vacuum_df=None):
         cs_agg['2026 Deleted'] = cs_agg['2026 Deleted'].fillna(0)
         # Net taps = put in minus deleted
         cs_agg['Net 2026'] = cs_agg['2026'] - cs_agg['2026 Deleted']
-        # Diff = total taps placed this season (put in + deleted trees) vs 2025.
-        # Deleted trees were tapped this season even though they were later removed,
-        # so they count toward taps placed.
-        cs_agg['Diff (26 vs 25)'] = cs_agg['2026'] + cs_agg['2026 Deleted'] - cs_agg[2025]
+        # Diff = 2025 - 2026 (positive = behind last year, negative = ahead)
+        cs_agg['Diff (26 vs 25)'] = cs_agg[2025] - cs_agg['2026']
         cs_agg['% of 2025'] = ((cs_agg['Net 2026'] / cs_agg[2025]) * 100).round(1)
         cs_agg['% of 2025'] = cs_agg['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
-        # Remaining accounts for deletions: need (2025 target - net taps) more
-        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['Net 2026']).clip(lower=0)
+        # Remaining = 2025 - 2026 - Del (treats deleted taps as permanent losses)
+        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['2026'] - cs_agg['2026 Deleted']).clip(lower=0)
         cs_agg = cs_agg.sort_values('% of 2025', ascending=True)  # Worst first
 
         # Top-level metrics
@@ -300,7 +298,7 @@ def render(personnel_df=None, vacuum_df=None):
             'Net 2026':  st.column_config.NumberColumn(width='small'),
             'Diff':      st.column_config.NumberColumn(width='small'),
             '%':         st.column_config.TextColumn(width='small'),
-            'Remaining': st.column_config.NumberColumn(width='small'),
+            'Remaining': st.column_config.NumberColumn(width='medium'),
         }
         st.dataframe(display_cs, column_config=_cs_col_cfg,
                      use_container_width=True, hide_index=True,

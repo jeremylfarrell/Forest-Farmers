@@ -54,7 +54,8 @@ SITE_COORDINATES = {
 TEMP_RANGES = [
     ('Below 10°F', None, 10),
     ('10–20°F', 10, 20),
-    ('Above 20°F', 20, None),
+    ('20–32°F', 20, 32),
+    ('Above 32°F', 32, None),
 ]
 
 # Overtime threshold (hours per week)

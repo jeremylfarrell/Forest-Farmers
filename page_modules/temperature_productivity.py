@@ -73,9 +73,10 @@ def _assign_temp_bucket(avg_temp):
 
 
 _BUCKET_COLORS = {
-    config.TEMP_RANGES[0][0]: "#1f77b4",   # cold  — blue
-    config.TEMP_RANGES[1][0]: "#ff7f0e",   # mild  — orange
-    config.TEMP_RANGES[2][0]: "#2ca02c",   # warm  — green
+    config.TEMP_RANGES[0][0]: "#1f77b4",   # cold       — blue
+    config.TEMP_RANGES[1][0]: "#ff7f0e",   # mild       — orange
+    config.TEMP_RANGES[2][0]: "#2ca02c",   # warm       — green
+    config.TEMP_RANGES[3][0]: "#d62728",   # above 32°F — red (should not be tapping)
 }
 
 
@@ -451,7 +452,9 @@ def render(personnel_df, vacuum_df=None):
         _pivot_fmt = {col: '{:.0f}' for col in pivot.columns if col not in ('Total Taps',)}
         _pivot_fmt['Total Taps'] = '{:,.0f}'
         st.dataframe(
-            pivot.style.format(_pivot_fmt, na_rep='—'),
+            pivot.style.format(_pivot_fmt, na_rep='—')
+                       .set_properties(**{'text-align': 'center'})
+                       .set_table_styles([{'selector': 'th', 'props': [('text-align', 'center')]}]),
             use_container_width=True,
         )
         st.caption(
