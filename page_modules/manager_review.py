@@ -768,6 +768,28 @@ def _save_approved(edited_df):
     # Prepare the dataframe for saving
     save_df = edited_df.copy()
 
+    # The Date column is formatted with '\n' for the two-line editor display
+    # (e.g. '2025-01-15\n08:30').  Replace that embedded newline with a space
+    # so the sheet stores '2025-01-15 08:30' — the format that pd.to_datetime()
+    # and make_key() both expect.  Without this the merge key never matches
+    # raw TSheets keys and every row stays "Pending" after approval.
+    if 'Date' in save_df.columns:
+        save_df['Date'] = (
+            save_df['Date'].astype(str)
+            .str.replace('\n', ' ', regex=False)
+            .str.strip()
+        )
+
+    # Also fix Employee Name: the editor displays "First\nLast" for compact
+    # two-line display — normalise back to "First Last" before saving so the
+    # emp|datetime merge key matches the raw TSheets employee names.
+    if 'Employee Name' in save_df.columns:
+        save_df['Employee Name'] = (
+            save_df['Employee Name'].astype(str)
+            .str.replace('\n', ' ', regex=False)
+            .str.strip()
+        )
+
     # Always stamp a fresh approval timestamp so that re-approvals of
     # TSheets-Updated rows correctly update the audit trail.
     save_df['Approved Date'] = datetime.now().strftime('%Y-%m-%d %H:%M')
