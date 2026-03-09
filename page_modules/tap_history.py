@@ -639,7 +639,156 @@ def render(personnel_df=None, vacuum_df=None):
     st.divider()
 
     # ==================================================================
-    # SECTION 4: Full Historical View (now includes 2026 + % of 2026)
+    # SECTION 4: Untracked Taps
+    # Taps that appear in TSheets (counted in Tapping Operations totals)
+    # but cannot be matched to a mainline in the historical Excel file.
+    # Two root causes: (a) blank mainline in TSheets, (b) mainline name
+    # doesn't exist in vt_taps_historical.xlsx.
+    # ==================================================================
+    if has_2026 and personnel_df is not None and not personnel_df.empty:
+        st.subheader("🔎 Untracked Taps")
+        st.markdown(
+            "*TSheets entries with Taps Put In > 0 that are **not** reflected in the "
+            "Tap History totals above — either the mainline was left blank or the name "
+            "doesn't match the historical file.*"
+        )
+
+        mainline_col_u = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+        taps_col_u     = find_column(personnel_df, 'Taps Put In', 'taps_in', 'taps put in')
+        date_col_u     = find_column(personnel_df, 'Date', 'date', 'timestamp')
+        emp_col_u      = find_column(personnel_df, 'Employee Name', 'employee', 'EE First')
+        job_col_u      = find_column(personnel_df, 'Job', 'job', 'Job Code')
+        notes_col_u    = find_column(personnel_df, 'Notes', 'notes')
+
+        if mainline_col_u and taps_col_u:
+            # Build case-insensitive set of known mainlines
+            known_mainlines = set(
+                hist_df['mainline'].dropna().astype(str).str.strip().str.lower()
+            )
+            known_mainlines.discard('')
+            known_mainlines.discard('nan')
+
+            untrk = personnel_df.copy()
+
+            # Season filter — same as get_2026_taps
+            if date_col_u:
+                untrk[date_col_u] = pd.to_datetime(untrk[date_col_u], errors='coerce')
+                untrk = untrk[untrk[date_col_u] >= pd.Timestamp('2025-12-01')]
+
+            # Only rows where taps were actually entered
+            untrk['_taps'] = pd.to_numeric(untrk[taps_col_u], errors='coerce').fillna(0)
+            untrk = untrk[untrk['_taps'] > 0]
+
+            # Normalise mainline for comparison
+            untrk['_ml'] = untrk[mainline_col_u].astype(str).str.strip()
+            untrk['_ml_low'] = untrk['_ml'].str.lower()
+
+            _blank_vals = {'', 'nan', 'none', 'na', 'n/a'}
+            blank_mask   = untrk['_ml_low'].isin(_blank_vals)
+            unknown_mask = (~blank_mask) & (~untrk['_ml_low'].isin(known_mainlines))
+
+            blank_df   = untrk[blank_mask].copy()
+            unknown_df = untrk[unknown_mask].copy()
+
+            total_untracked_taps = int(blank_df['_taps'].sum() + unknown_df['_taps'].sum())
+            total_untracked_rows = len(blank_df) + len(unknown_df)
+
+            # Build a helper to produce a clean display table
+            _disp_col_map = {}
+            for _c, _lbl in [
+                (emp_col_u,      'Employee'),
+                (date_col_u,     'Date'),
+                (taps_col_u,     'Taps Put In'),
+                (mainline_col_u, 'Mainline'),
+                (job_col_u,      'Job'),
+                (notes_col_u,    'Notes'),
+            ]:
+                if _c and _c in untrk.columns:
+                    _disp_col_map[_c] = _lbl
+
+            def _make_untrk_display(df):
+                d = df[[c for c in _disp_col_map]].rename(columns=_disp_col_map).copy()
+                if 'Date' in d.columns:
+                    d['Date'] = pd.to_datetime(d['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                if 'Taps Put In' in d.columns:
+                    d['Taps Put In'] = d['Taps Put In'].astype(int)
+                sort_by = [c for c in ['Date', 'Employee', 'Mainline'] if c in d.columns]
+                if sort_by:
+                    d = d.sort_values(sort_by)
+                return d.reset_index(drop=True)
+
+            if total_untracked_taps > 0:
+                st.warning(
+                    f"⚠️ **{total_untracked_taps:,} taps** across "
+                    f"**{total_untracked_rows} TSheets entr"
+                    f"{'y' if total_untracked_rows == 1 else 'ies'}** "
+                    f"are counted in Tapping Operations but missing from Tap History. "
+                    f"Fix the mainline field in TSheets (or the Manager Review editor) "
+                    f"to close the gap."
+                )
+
+                tab_blank, tab_unknown = st.tabs([
+                    f"🚫 No Mainline Entered  —  "
+                    f"{len(blank_df)} {'entry' if len(blank_df) == 1 else 'entries'}, "
+                    f"{int(blank_df['_taps'].sum()):,} taps",
+
+                    f"❓ Unrecognised Mainline  —  "
+                    f"{len(unknown_df)} {'entry' if len(unknown_df) == 1 else 'entries'}, "
+                    f"{int(unknown_df['_taps'].sum()):,} taps",
+                ])
+
+                with tab_blank:
+                    if blank_df.empty:
+                        st.success("No entries with a blank mainline field.")
+                    else:
+                        st.markdown(
+                            "*Worker logged taps in TSheets but left the mainline field empty. "
+                            "Ask them to correct it, or fix it in Manager Data Review.*"
+                        )
+                        st.dataframe(
+                            _make_untrk_display(blank_df),
+                            use_container_width=True, hide_index=True,
+                            height=min(38 + len(blank_df) * 36, 500),
+                        )
+
+                with tab_unknown:
+                    if unknown_df.empty:
+                        st.success("No entries with unrecognised mainline names.")
+                    else:
+                        st.markdown(
+                            "*Mainline name is filled in but doesn't match any row in "
+                            "`vt_taps_historical.xlsx`. Common causes: spelling difference, "
+                            "extra space, or a brand-new mainline not yet in the Excel file.*"
+                        )
+                        disp_unk = _make_untrk_display(unknown_df)
+                        # Show unique unrecognised names as a quick reference
+                        if 'Mainline' in disp_unk.columns:
+                            bad_names = (
+                                disp_unk.groupby('Mainline')['Taps Put In']
+                                .sum().sort_values(ascending=False)
+                                .reset_index()
+                            )
+                            bad_names.columns = ['Mainline (as entered)', 'Total Taps']
+                            st.markdown("**Unique unrecognised mainline names:**")
+                            st.dataframe(
+                                bad_names, use_container_width=True, hide_index=True,
+                                height=min(38 + len(bad_names) * 36, 250),
+                            )
+                        st.markdown("**All entries:**")
+                        st.dataframe(
+                            disp_unk, use_container_width=True, hide_index=True,
+                            height=min(38 + len(disp_unk) * 36, 500),
+                        )
+            else:
+                st.success(
+                    "✅ All tapped entries are matched to a known mainline — "
+                    "Tap History and Tapping Operations totals are in sync."
+                )
+
+    st.divider()
+
+    # ==================================================================
+    # SECTION 5: Full Historical View (now includes 2026 + % of 2026)
     # ==================================================================
     if has_2026:
         with st.expander("📊 Full Historical Data (2021-2026)"):
