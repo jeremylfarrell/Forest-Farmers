@@ -13,8 +13,14 @@ import config
 from utils.helpers import calculate_sap_flow_likelihood
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_weather_forecast(latitude=None, longitude=None, days=10):
-    """Get weather forecast from Open-Meteo API"""
+    """Get weather forecast from Open-Meteo API.
+
+    Cached for 1 hour per (latitude, longitude, days) combo so that
+    repeated Streamlit reruns don't hammer the Open-Meteo rate limit.
+    Returns None on any error; the caller is responsible for the error UI.
+    """
     if latitude is None or longitude is None:
         _coords = config.SITE_COORDINATES['NY']
         latitude = _coords['lat']
@@ -36,12 +42,12 @@ def get_weather_forecast(latitude=None, longitude=None, days=10):
             "timezone": "America/New_York",
             "forecast_days": days
         }
-        
+
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
-        
+
         data = response.json()
-        
+
         # Convert to DataFrame
         df = pd.DataFrame({
             'date': pd.to_datetime(data['daily']['time']),
@@ -50,11 +56,10 @@ def get_weather_forecast(latitude=None, longitude=None, days=10):
             'precipitation': data['daily']['precipitation_sum'],
             'wind_speed': data['daily']['windspeed_10m_max']
         })
-        
+
         return df
-        
-    except Exception as e:
-        st.error(f"Error fetching weather data: {str(e)}")
+
+    except Exception:
         return None
 
 
@@ -103,12 +108,16 @@ def render(vacuum_df, personnel_df):
     
     st.divider()
     
-    # Get forecast
+    # Get forecast — result is cached 1 hr so reruns don't re-hit the API
     with st.spinner("Fetching weather forecast..."):
         forecast_df = get_weather_forecast(latitude, longitude, days=10)
-    
+
     if forecast_df is None or forecast_df.empty:
-        st.error("Unable to fetch weather forecast. Please try again later.")
+        st.error(
+            "Unable to fetch weather forecast from Open-Meteo. "
+            "This is usually a temporary rate-limit (429) — wait a minute and refresh. "
+            "The forecast will be cached for 1 hour once it loads successfully."
+        )
         return
     
     # Calculate sap flow likelihood
