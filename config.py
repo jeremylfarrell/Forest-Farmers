@@ -138,14 +138,14 @@ FREEZE_DROP_RATE_LIKELY = 0.50     # Drop rate > 50% = "LIKELY LEAK"
 FREEZE_DROP_RATE_WATCH = 0.25      # Drop rate > 25% = "WATCH"
 
 # Releaser differential color thresholds (inches)
-# Used for the freezing report — graduated color scale per manager request
+# Used for the freezing report — 3-band scale per manager request
+# Good: 0-2"  (green)
+# Low Priority: 2-5"  (yellow/amber)
+# Critical: >5"  (red/pink)
 RELEASER_DIFF_THRESHOLDS = [
-    (1.0,  '#006400', 'Excellent'),   # < 1"  — dark green
-    (2.0,  '#228B22', 'Good'),        # 1-2"  — medium green
-    (3.0,  '#90EE90', 'Acceptable'),  # 2-3"  — light green
-    (5.0,  '#DAA520', 'Moderate'),    # 3-5"  — dark yellow
-    (10.0, '#FFD700', 'Elevated'),    # 5-10" — light yellow
-    (99.0, '#FF69B4', 'Critical'),    # > 10" — pink (approaching zero)
+    (2.0,  '#228B22', 'Good'),         # 0-2"  — green
+    (5.0,  '#DAA520', 'Low Priority'), # 2-5"  — amber
+    (99.0, '#FF69B4', 'Critical'),     # > 5"  — pink
 ]
 RELEASER_FROZEN_COLOR = '#8B0000'     # Dark red — vacuum=0 but releaser diff > 0 (frozen)
 RELEASER_OFF_COLOR = '#808080'        # Gray — vacuum=0 AND releaser diff=0 (pump off)

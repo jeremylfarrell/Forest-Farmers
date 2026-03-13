@@ -55,6 +55,93 @@ def get_historical_temperature(lat, lon, start_date, end_date):
         return None
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_historical_hourly_temperature(lat, lon, start_date, end_date):
+    """
+    Fetch hourly temperature from the Open-Meteo **archive** API.
+    Used to compute average temperature during active work hours only.
+
+    Returns DataFrame with columns: datetime (Eastern), temp_f
+    """
+    try:
+        url = "https://archive-api.open-meteo.com/v1/archive"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "start_date": start_date,
+            "end_date": end_date,
+            "hourly": ["temperature_2m"],
+            "temperature_unit": "fahrenheit",
+            "timezone": "America/New_York",
+        }
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()["hourly"]
+        hourly_df = pd.DataFrame({
+            "datetime": pd.to_datetime(data["time"]),
+            "temp_f": data["temperature_2m"],
+        })
+        return hourly_df
+    except Exception as e:
+        return None
+
+
+def _compute_workhour_avg_temp(tapping_df, date_col, hourly_temp_df, clock_in_col=None, clock_out_col=None):
+    """
+    For each date that tapping occurred, compute the average temperature
+    during the actual hours workers were clocked in.
+
+    If Clock In / Clock Out are available, average only those hours.
+    Falls back to averaging all hours where any tapping job was active that day.
+
+    Returns a DataFrame with columns: _join_date, Avg_Temp, High, Low
+    """
+    if hourly_temp_df is None or hourly_temp_df.empty:
+        return None
+
+    hourly = hourly_temp_df.copy()
+    hourly['_date'] = hourly['datetime'].dt.normalize()
+    hourly['_hour'] = hourly['datetime'].dt.hour
+
+    rows = []
+    for date, day_taps in tapping_df.groupby(tapping_df[date_col].dt.normalize()):
+        day_hourly = hourly[hourly['_date'] == date]
+        if day_hourly.empty:
+            continue
+
+        # Determine active hours from Clock In / Clock Out if available
+        active_hours = set()
+        if clock_in_col and clock_out_col:
+            for _, row in day_taps.iterrows():
+                ci = row.get(clock_in_col)
+                co = row.get(clock_out_col)
+                if pd.notna(ci) and pd.notna(co):
+                    # Clamp to same day
+                    h_start = max(0, pd.Timestamp(ci).hour)
+                    h_end = min(23, pd.Timestamp(co).hour)
+                    active_hours.update(range(h_start, h_end + 1))
+
+        if active_hours:
+            work_temps = day_hourly[day_hourly['_hour'].isin(active_hours)]['temp_f']
+        else:
+            # No clock-in data — use all daytime hours (6am-8pm) as proxy
+            work_temps = day_hourly[day_hourly['_hour'].between(6, 20)]['temp_f']
+
+        if work_temps.empty:
+            work_temps = day_hourly['temp_f']  # last resort: full day
+
+        rows.append({
+            '_join_date': date,
+            'Avg_Temp': round(work_temps.mean(), 1),
+            'High': day_hourly['temp_f'].max(),
+            'Low': day_hourly['temp_f'].min(),
+        })
+
+    if not rows:
+        return None
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # HELPERS
 # ---------------------------------------------------------------------------
@@ -90,8 +177,8 @@ def render(personnel_df, vacuum_df=None):
     st.title("🌡️ Tapping Productivity by Temperature")
     st.markdown(
         "*How does outdoor temperature affect tapping speed?  "
-        "Each work day is matched to the daily average temperature, "
-        "then grouped into ranges so you can compare taps installed, "
+        "Each work day is matched to the **average temperature during active tapping hours** "
+        "(Clock In → Clock Out), then grouped into ranges so you can compare taps installed, "
         "hours worked, and taps/hour across cold, mild, and warm days.*"
     )
 
@@ -110,6 +197,8 @@ def render(personnel_df, vacuum_df=None):
     taps_in_col = find_column(df, 'Taps Put In', 'taps_in')
     job_col = find_column(df, 'Job', 'job', 'Job Code')
     mainline_col = find_column(df, 'mainline.', 'mainline', 'Mainline')
+    clock_in_col = find_column(df, 'Clock In', 'clock_in', 'clockin')
+    clock_out_col = find_column(df, 'Clock Out', 'clock_out', 'clockout')
 
     if not all([date_col, emp_col, hours_col, taps_in_col, job_col]):
         st.error("Missing required columns in personnel data.")
@@ -132,7 +221,7 @@ def render(personnel_df, vacuum_df=None):
         return
 
     # ------------------------------------------------------------------
-    # 2. FETCH TEMPERATURE
+    # 2. FETCH TEMPERATURE (hourly, filtered to work hours)
     # ------------------------------------------------------------------
     start_date = df['Date'].min().strftime('%Y-%m-%d')
     end_date = df['Date'].max().strftime('%Y-%m-%d')
@@ -141,30 +230,52 @@ def render(personnel_df, vacuum_df=None):
     has_site = 'Site' in df.columns
     sites = sorted(df['Site'].unique()) if has_site else ['VT']
 
-    with st.spinner("Fetching historical temperature data..."):
-        temp_frames = []
+    df['_join_date'] = df['Date'].dt.normalize()
+
+    with st.spinner("Fetching hourly temperature data (work-hours averaging)..."):
+        workhour_frames = []
+        daily_frames = []   # fallback
         for site in sites:
             coords = config.SITE_COORDINATES.get(site, config.SITE_COORDINATES.get('VT'))
-            site_temp = get_historical_temperature(
+            # Primary: hourly temps filtered to active tapping hours
+            site_df = df[df['Site'] == site].copy() if has_site and len(sites) > 1 else df.copy()
+            hourly_temp = get_historical_hourly_temperature(
                 coords['lat'], coords['lon'], start_date, end_date
             )
-            if site_temp is not None:
-                site_temp = site_temp.copy()
-                site_temp['Site'] = site
-                temp_frames.append(site_temp)
+            wh_temp = _compute_workhour_avg_temp(
+                site_df, 'Date', hourly_temp,
+                clock_in_col=clock_in_col,
+                clock_out_col=clock_out_col,
+            )
+            if wh_temp is not None:
+                wh_temp['Site'] = site
+                workhour_frames.append(wh_temp)
+            else:
+                # Fallback to daily High/Low average
+                site_temp = get_historical_temperature(
+                    coords['lat'], coords['lon'], start_date, end_date
+                )
+                if site_temp is not None:
+                    site_temp = site_temp.copy()
+                    site_temp['_join_date'] = site_temp['Date'].dt.normalize()
+                    site_temp['Site'] = site
+                    daily_frames.append(site_temp)
 
-    if not temp_frames:
+    # Build unified temp lookup
+    if workhour_frames:
+        temp_df = pd.concat(workhour_frames, ignore_index=True)
+        st.caption("🕐 Temperature averaged during active tapping hours (Clock In → Clock Out)")
+    elif daily_frames:
+        temp_df = pd.concat(daily_frames, ignore_index=True)
+        temp_df = temp_df.rename(columns={'Date': '_join_date'}) if '_join_date' not in temp_df.columns else temp_df
+        st.caption("📊 Temperature uses full-day average (Clock In/Out not available)")
+    else:
         st.error("Could not fetch temperature data from Open-Meteo.")
         return
-
-    temp_df = pd.concat(temp_frames, ignore_index=True)
 
     # ------------------------------------------------------------------
     # 3. JOIN TAPPING ← TEMPERATURE
     # ------------------------------------------------------------------
-    df['_join_date'] = df['Date'].dt.normalize()
-    temp_df['_join_date'] = temp_df['Date'].dt.normalize()
-
     if has_site and len(sites) > 1:
         merged = df.merge(
             temp_df[['_join_date', 'Site', 'High', 'Low', 'Avg_Temp']],

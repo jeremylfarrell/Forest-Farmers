@@ -77,6 +77,8 @@ def load_historical_taps():
         if os.path.exists(path):
             df = pd.read_excel(path)
             df = df.dropna(subset=['mainline'])
+            # Fix GBW typo (2025 data entry error) — should be GDW
+            df['mainline'] = df['mainline'].str.replace(r'^GBW', 'GDW', regex=True)
             df['Conductor System'] = df['mainline'].apply(extract_conductor_system)
             for yr in YEAR_COLS:
                 if yr in df.columns:
@@ -153,6 +155,37 @@ def get_2026_taps_deleted(personnel_df):
     return taps_del_by_ml
 
 
+def get_2026_taps_capped(personnel_df):
+    """
+    Extract current season taps CAPPED per mainline from live personnel data.
+    Includes December 2025 onward (season start) through current date.
+    Returns a Series indexed by mainline name with total taps capped.
+    """
+    if personnel_df is None or personnel_df.empty:
+        return pd.Series(dtype=float)
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+    taps_cap_col = find_column(personnel_df, 'taps capped', 'Taps Capped', 'taps_capped')
+
+    if not mainline_col or not taps_cap_col:
+        return pd.Series(dtype=float)
+
+    df = personnel_df.copy()
+    df['_taps_cap'] = pd.to_numeric(df[taps_cap_col], errors='coerce').fillna(0)
+    df['_ml'] = df[mainline_col].astype(str).str.strip()
+
+    date_col = find_column(df, 'Date', 'date', 'timestamp')
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        season_start = pd.Timestamp('2025-12-01')
+        df = df[df[date_col] >= season_start]
+
+    df = df[df['_ml'].str.len() > 0]
+    df = df[df['_ml'] != 'nan']
+
+    return df.groupby('_ml')['_taps_cap'].sum()
+
+
 def get_2026_tappers(personnel_df):
     """
     Extract unique employee names per mainline from live personnel data.
@@ -210,6 +243,7 @@ def render(personnel_df=None, vacuum_df=None):
     # Get live 2026 data from personnel sheet
     taps_2026 = get_2026_taps(personnel_df)
     taps_2026_del = get_2026_taps_deleted(personnel_df)
+    taps_2026_cap = get_2026_taps_capped(personnel_df)
     tappers_2026 = get_2026_tappers(personnel_df)
     has_2026 = len(taps_2026) > 0
 
@@ -217,12 +251,14 @@ def render(personnel_df=None, vacuum_df=None):
     if has_2026:
         hist_df['2026'] = hist_df['mainline'].map(taps_2026).fillna(0)
         hist_df['2026 Deleted'] = hist_df['mainline'].map(taps_2026_del).fillna(0)
+        hist_df['2026 Capped'] = hist_df['mainline'].map(taps_2026_cap).fillna(0)
     else:
         hist_df['2026'] = 0
         hist_df['2026 Deleted'] = 0
+        hist_df['2026 Capped'] = 0
 
     all_years = YEAR_COLS + ['2026'] if has_2026 else YEAR_COLS
-    agg_years = all_years + (['2026 Deleted'] if has_2026 else [])
+    agg_years = all_years + (['2026 Deleted', '2026 Capped'] if has_2026 else [])
 
     # ==================================================================
     # SECTION 1: 2026 vs 2025 Season Comparison (THE MAIN EVENT)
@@ -240,23 +276,25 @@ def render(personnel_df=None, vacuum_df=None):
     if has_2026:
         cs_agg['2026'] = cs_agg['2026'].fillna(0)
         cs_agg['2026 Deleted'] = cs_agg['2026 Deleted'].fillna(0)
+        cs_agg['2026 Capped'] = cs_agg['2026 Capped'].fillna(0)
         # Net taps = put in minus deleted
         cs_agg['Net 2026'] = cs_agg['2026'] - cs_agg['2026 Deleted']
         # Diff = 2025 - 2026 (positive = behind last year, negative = ahead)
         cs_agg['Diff (26 vs 25)'] = cs_agg[2025] - cs_agg['2026']
         cs_agg['% of 2025'] = ((cs_agg['Net 2026'] / cs_agg[2025]) * 100).round(1)
         cs_agg['% of 2025'] = cs_agg['% of 2025'].replace([float('inf'), float('-inf')], 0).fillna(0)
-        # Remaining = 2025 - 2026 - Del (treats deleted taps as permanent losses)
-        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['2026'] - cs_agg['2026 Deleted']).clip(lower=0)
+        # Remaining = 2025 - net 2026 (treats deleted taps as permanent losses)
+        cs_agg['Remaining'] = (cs_agg[2025] - cs_agg['Net 2026']).clip(lower=0)
         cs_agg = cs_agg.sort_values('% of 2025', ascending=True)  # Worst first
 
         # Top-level metrics
         total_2025 = cs_agg[2025].sum()
         total_2026 = cs_agg['2026'].sum()
         total_2026_del = cs_agg['2026 Deleted'].sum()
+        total_2026_cap = cs_agg['2026 Capped'].sum()
         total_net = cs_agg['Net 2026'].sum()
 
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
             st.metric("2025 Baseline (VT)", f"{int(total_2025):,}")
         with col2:
@@ -264,9 +302,11 @@ def render(personnel_df=None, vacuum_df=None):
         with col3:
             st.metric("2026 Deleted", f"{int(total_2026_del):,}")
         with col4:
+            st.metric("2026 Capped", f"{int(total_2026_cap):,}")
+        with col5:
             pct_overall = (total_net / total_2025 * 100) if total_2025 > 0 else 0
             st.metric("% Complete (Net)", f"{pct_overall:.1f}%")
-        with col5:
+        with col6:
             remaining = max(total_2025 - total_net, 0)
             st.metric("Remaining to Match", f"{int(remaining):,}")
 
@@ -277,16 +317,16 @@ def render(personnel_df=None, vacuum_df=None):
 
         # Conductor system comparison table
         st.markdown("**By Conductor System** — sorted by % complete (lowest first = needs attention)")
-        display_cs = cs_agg[['Conductor System', 2025, '2026', '2026 Deleted', 'Net 2026',
-                             'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
+        display_cs = cs_agg[['Conductor System', 2025, '2026', '2026 Deleted', '2026 Capped',
+                             'Net 2026', 'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
         display_cs = display_cs.rename(columns={
             2025: '2025',
             '2026 Deleted': 'Del',
+            '2026 Capped': 'Cap',
             'Diff (26 vs 25)': 'Diff',
             '% of 2025': '%',
-            'Remaining': 'Remaining',
         })
-        for int_col in ['2025', '2026', 'Del', 'Net 2026', 'Diff', 'Remaining']:
+        for int_col in ['2025', '2026', 'Del', 'Cap', 'Net 2026', 'Diff', 'Remaining']:
             display_cs[int_col] = display_cs[int_col].astype(int)
         display_cs['%'] = display_cs['%'].apply(lambda x: f"{x:.1f}%")
 
@@ -295,10 +335,11 @@ def render(personnel_df=None, vacuum_df=None):
             '2025':      st.column_config.NumberColumn(width='small'),
             '2026':      st.column_config.NumberColumn(width='small'),
             'Del':       st.column_config.NumberColumn(width='small'),
+            'Cap':       st.column_config.NumberColumn(width='small'),
             'Net 2026':  st.column_config.NumberColumn(width='small'),
             'Diff':      st.column_config.NumberColumn(width='small'),
             '%':         st.column_config.TextColumn(width='small'),
-            'Remaining': st.column_config.NumberColumn(width='medium'),
+            'Remaining': st.column_config.NumberColumn(width='small'),
         }
         st.dataframe(display_cs, column_config=_cs_col_cfg,
                      use_container_width=True, hide_index=True,
@@ -402,16 +443,16 @@ def render(personnel_df=None, vacuum_df=None):
         # Mainline detail table
         display_cols = ['mainline'] + YEAR_COLS
         if has_2026:
-            display_cols.extend(['2026', '2026 Deleted'])
+            display_cols.extend(['2026', '2026 Deleted', '2026 Capped'])
 
         ml_display = cs_data[display_cols].copy()
 
         if has_2026:
             ml_display['2026 Deleted'] = ml_display['2026 Deleted'].fillna(0)
+            ml_display['2026 Capped'] = ml_display['2026 Capped'].fillna(0)
             ml_display['Net 2026'] = ml_display['2026'].fillna(0) - ml_display['2026 Deleted']
             ml_display['Diff (26 vs 25)'] = (
                 ml_display['2026'].fillna(0)
-                + ml_display['2026 Deleted'].fillna(0)
                 - ml_display[2025].fillna(0)
             ).astype(int)
             ml_display['% of 2025'] = ((ml_display['Net 2026'] / ml_display[2025].fillna(0)) * 100).round(1)
@@ -449,6 +490,7 @@ def render(personnel_df=None, vacuum_df=None):
         if has_2026:
             ml_display['2026'] = ml_display['2026'].fillna(0).astype(int)
             ml_display['2026 Deleted'] = ml_display['2026 Deleted'].astype(int)
+            ml_display['2026 Capped'] = ml_display['2026 Capped'].astype(int)
             ml_display['Net 2026'] = ml_display['Net 2026'].astype(int)
             ml_display['% of 2025'] = ml_display['% of 2025'].apply(lambda x: f"{x:.0f}%")
 
@@ -458,7 +500,7 @@ def render(personnel_df=None, vacuum_df=None):
         # Reorder columns for clarity
         if has_2026:
             col_order = ['Mainline'] + [yr for yr in YEAR_COLS] + [
-                '2026', '2026 Deleted', 'Net 2026', 'Diff (26 vs 25)',
+                '2026', '2026 Deleted', '2026 Capped', 'Net 2026', 'Diff (26 vs 25)',
                 '% of 2025', 'Tappers (2026)', 'Status'
             ]
             ml_display = ml_display[[c for c in col_order if c in ml_display.columns]]
@@ -494,6 +536,7 @@ def render(personnel_df=None, vacuum_df=None):
             t2025 = row[2025] if pd.notna(row[2025]) else 0
             t2026 = row.get('2026', 0) if pd.notna(row.get('2026', 0)) else 0
             t2026_del = row.get('2026 Deleted', 0) if pd.notna(row.get('2026 Deleted', 0)) else 0
+            t2026_cap = row.get('2026 Capped', 0) if pd.notna(row.get('2026 Capped', 0)) else 0
             net_2026 = t2026 - t2026_del
 
             # Skip mainlines with no 2025 baseline
@@ -514,6 +557,7 @@ def render(personnel_df=None, vacuum_df=None):
                 '2025 Taps': int(t2025),
                 '2026 Taps': int(t2026),
                 '2026 Deleted': int(t2026_del),
+                '2026 Capped': int(t2026_cap),
                 'Net 2026': int(net_2026),
                 '% of 2025': f"{pct:.0f}%",
                 'Remaining': int(max(t2025 - net_2026, 0)),
@@ -784,6 +828,73 @@ def render(personnel_df=None, vacuum_df=None):
                     "✅ All tapped entries are matched to a known mainline — "
                     "Tap History and Tapping Operations totals are in sync."
                 )
+
+    st.divider()
+
+    # ==================================================================
+    # SECTION 4b: Duplicate Entry Detection
+    # Flags TSheets rows that share the same Employee + Date + Mainline
+    # but were entered multiple times (e.g. Howard Palmer / GDW20.3 issue).
+    # ==================================================================
+    if has_2026 and personnel_df is not None and not personnel_df.empty:
+        with st.expander("🔁 Duplicate Entry Detection"):
+            st.markdown(
+                "*Rows where the same employee logged taps on the same date for the same mainline more than once. "
+                "These may be accidental double-entries — confirm with the employee before deleting in TSheets.*"
+            )
+
+            mainline_col_d = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline', 'location')
+            taps_col_d = find_column(personnel_df, 'Taps Put In', 'taps_in', 'taps put in')
+            date_col_d = find_column(personnel_df, 'Date', 'date', 'timestamp')
+            emp_col_d = find_column(personnel_df, 'Employee Name', 'employee', 'EE First')
+            job_col_d = find_column(personnel_df, 'Job', 'job', 'Job Code')
+
+            if all([mainline_col_d, taps_col_d, date_col_d, emp_col_d]):
+                dup_df = personnel_df.copy()
+                dup_df[date_col_d] = pd.to_datetime(dup_df[date_col_d], errors='coerce')
+                dup_df = dup_df[dup_df[date_col_d] >= pd.Timestamp('2025-12-01')]
+                dup_df['_taps'] = pd.to_numeric(dup_df[taps_col_d], errors='coerce').fillna(0)
+                dup_df = dup_df[dup_df['_taps'] > 0]
+                dup_df['_ml'] = dup_df[mainline_col_d].astype(str).str.strip()
+                dup_df['_emp'] = dup_df[emp_col_d].astype(str).str.strip()
+                dup_df['_date'] = dup_df[date_col_d].dt.date
+
+                # Count occurrences per Employee + Date + Mainline
+                key_cols = ['_emp', '_date', '_ml']
+                counts = dup_df.groupby(key_cols).size().reset_index(name='_count')
+                dup_keys = counts[counts['_count'] > 1]
+
+                if dup_keys.empty:
+                    st.success("✅ No duplicate entries detected for this season.")
+                else:
+                    # Merge back to get full rows
+                    dup_rows = dup_df.merge(dup_keys[key_cols], on=key_cols, how='inner')
+                    # Build display table
+                    _dup_col_map = {}
+                    for _c, _lbl in [
+                        (emp_col_d,      'Employee'),
+                        (date_col_d,     'Date'),
+                        (mainline_col_d, 'Mainline'),
+                        (taps_col_d,     'Taps Put In'),
+                        (job_col_d,      'Job'),
+                    ]:
+                        if _c and _c in dup_rows.columns:
+                            _dup_col_map[_c] = _lbl
+                    disp_dup = dup_rows[[c for c in _dup_col_map]].rename(columns=_dup_col_map)
+                    if 'Date' in disp_dup.columns:
+                        disp_dup['Date'] = pd.to_datetime(disp_dup['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                    if 'Taps Put In' in disp_dup.columns:
+                        disp_dup['Taps Put In'] = pd.to_numeric(disp_dup['Taps Put In'], errors='coerce').fillna(0).astype(int)
+                    disp_dup = disp_dup.sort_values([c for c in ['Employee', 'Date', 'Mainline'] if c in disp_dup.columns])
+
+                    st.warning(
+                        f"⚠️ Found **{len(dup_keys)} unique Employee/Date/Mainline combinations** with duplicate entries "
+                        f"({len(dup_rows)} total rows). Correct in TSheets or Manager Data Review."
+                    )
+                    st.dataframe(disp_dup.reset_index(drop=True), use_container_width=True, hide_index=True,
+                                 height=min(38 + len(disp_dup) * 36, 500))
+            else:
+                st.info("Could not find required columns for duplicate detection.")
 
     st.divider()
 

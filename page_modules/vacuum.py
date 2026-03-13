@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import timedelta
 import config
 from utils import find_column, get_vacuum_column, get_releaser_column, extract_conductor_system
 from utils.freeze_thaw import (
@@ -18,6 +19,26 @@ from utils.freeze_thaw import (
     add_freeze_bands_to_figure
 )
 from utils.weather_api import get_temperature_data
+
+
+def _to_eastern(ts):
+    """
+    Convert a UTC timestamp to Eastern Time.
+    Handles both EDT (UTC-4, Mar-Nov) and EST (UTC-5, Nov-Mar) automatically.
+    Returns a timezone-naive datetime in Eastern local time.
+    """
+    if pd.isna(ts):
+        return ts
+    try:
+        from zoneinfo import ZoneInfo
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=__import__('datetime').timezone.utc)
+        return ts.astimezone(ZoneInfo('America/New_York')).replace(tzinfo=None)
+    except Exception:
+        # Fallback: approximate DST detection (March–November = EDT UTC-4, else EST UTC-5)
+        month = ts.month
+        is_dst = 3 <= month <= 11
+        return ts + timedelta(hours=-4 if is_dst else -5)
 
 
 def _get_vacuum_cols(df):
@@ -526,7 +547,7 @@ def render(vacuum_df, personnel_df):
 
     if 'Last_Report' in display.columns:
         display['Last_Report_Display'] = display['Last_Report'].apply(
-            lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) else "N/A"
+            lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) else "N/A"
         )
         display_cols.append('Last_Report_Display')
         col_names.append('Last Report')
@@ -684,9 +705,9 @@ def _render_freezing_report(vacuum_df):
     vdf[vacuum_col] = pd.to_numeric(vdf[vacuum_col], errors='coerce')
     vdf[releaser_col] = pd.to_numeric(vdf[releaser_col], errors='coerce')
 
-    # Filter to valid maple sensors (2+ uppercase letters + number)
+    # Filter to valid maple sensors (1-6 uppercase letters + number; includes M-line)
     import re
-    valid_sensor = r'^[A-Z]{2,6}\d'
+    valid_sensor = r'^[A-Z]{1,6}\d'
     vdf = vdf[vdf[sensor_col].str.match(valid_sensor, na=False)]
 
     # Exclude non-maple sensors (birch, relays, typos)
@@ -707,20 +728,27 @@ def _render_freezing_report(vacuum_df):
         *latest.apply(lambda r: config.get_releaser_diff_color(r[vacuum_col], r[releaser_col]), axis=1)
     )
 
-    # Summary metrics
+    # Convert timestamps from UTC to Eastern Time before display
+    if timestamp_col in latest.columns:
+        latest[timestamp_col] = latest[timestamp_col].apply(_to_eastern)
+
+    # Summary metrics (matches manager's 3-band + frozen/off scheme)
     frozen_count = len(latest[latest['_label'] == 'FROZEN'])
     off_count = len(latest[latest['_label'] == 'OFF'])
     critical_count = len(latest[latest['_label'] == 'Critical'])
-    healthy_count = len(latest[latest['_label'].isin(['Excellent', 'Good', 'Acceptable'])])
+    low_priority_count = len(latest[latest['_label'] == 'Low Priority'])
+    good_count = len(latest[latest['_label'] == 'Good'])
 
-    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
     with mc1:
         st.metric("🔴 FROZEN", frozen_count)
     with mc2:
-        st.metric("🩷 Critical (>10\")", critical_count)
+        st.metric("🩷 Critical (>5\")", critical_count)
     with mc3:
-        st.metric("🟢 Healthy (<3\")", healthy_count)
+        st.metric("🟡 Low Priority (2-5\")", low_priority_count)
     with mc4:
+        st.metric("🟢 Good (<2\")", good_count)
+    with mc5:
         st.metric("⚫ Pump Off", off_count)
 
     # --- Conductor system selector ---
@@ -770,11 +798,13 @@ def _render_freezing_report(vacuum_df):
     st.plotly_chart(fig, use_container_width=True)
 
     # --- Color legend ---
-    legend_cols = st.columns(8)
+    legend_cols = st.columns(5)
     legend_items = [
-        ('#006400', '<1"'), ('#228B22', '1-2"'), ('#90EE90', '2-3"'),
-        ('#DAA520', '3-5"'), ('#FFD700', '5-10"'), ('#FF69B4', '>10"'),
-        ('#8B0000', 'FROZEN'), ('#808080', 'OFF'),
+        ('#228B22', 'Good (0-2")'),
+        ('#DAA520', 'Low Priority (2-5")'),
+        ('#FF69B4', 'Critical (>5")'),
+        ('#8B0000', 'FROZEN'),
+        ('#808080', 'OFF'),
     ]
     for col_w, (color, label) in zip(legend_cols, legend_items):
         with col_w:
@@ -790,7 +820,7 @@ def _render_freezing_report(vacuum_df):
         detail['Vacuum'] = detail['Vacuum'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
         detail['Releaser Diff'] = detail['Releaser Diff'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
         detail['Last Reading'] = detail['Last Reading'].apply(
-            lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notna(x) and hasattr(x, 'strftime') else ''
+            lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) and hasattr(x, 'strftime') else ''
         )
         st.dataframe(detail, use_container_width=True, hide_index=True, height=400)
 
@@ -810,9 +840,9 @@ def _render_sensor_drilldown(vacuum_df):
         st.warning("Missing required columns for sensor drill-down.")
         return
 
-    # Filter to valid sensors, excluding non-maple
+    # Filter to valid sensors, excluding non-maple (1-6 uppercase letters + number)
     import re
-    valid_sensor = r'^[A-Z]{2,6}\d'
+    valid_sensor = r'^[A-Z]{1,6}\d'
     mask = (vacuum_df[sensor_col].str.match(valid_sensor, na=False) &
             ~vacuum_df[sensor_col].apply(config.is_excluded_sensor))
     sensors = sorted(vacuum_df[mask][sensor_col].unique())
