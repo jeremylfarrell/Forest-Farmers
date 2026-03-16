@@ -362,8 +362,8 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                     # Add temperature overlay
                     _days = 2 if label == "24H" else 8
                     _site = 'NY'
-                    if 'Site' in vacuum_df.columns and len(vacuum_df['Site'].unique()) == 1:
-                        _site = vacuum_df['Site'].iloc[0]
+                    if 'Site' in vdf.columns and len(vdf['Site'].unique()) == 1:
+                        _site = vdf['Site'].iloc[0]
                     _temp_series = get_hourly_temperature(days=_days, site=_site)
                     if _temp_series is not None:
                         _temp_series = _temp_series[
