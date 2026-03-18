@@ -109,12 +109,59 @@ def render(vacuum_df, personnel_df):
     )
 
     releaser_col = get_releaser_column(vacuum_df)
+    sensor_col_trends = find_column(vacuum_df, 'Name', 'name', 'Sensor Name', 'sensor')
+
+    # ── Aggregation level selector ────────────────────────────────
+    # Manager requested: view by individual line, mainline, conductor system, or entire sugarbush
+    agg_level = "Entire Sugarbush"
+    agg_filter_value = None
+    if vacuum_col and timestamp_col and sensor_col_trends:
+        agg_col1, agg_col2 = st.columns([1, 2])
+        with agg_col1:
+            agg_level = st.selectbox(
+                "Aggregation Level",
+                ["Entire Sugarbush", "By Conductor System", "By Individual Sensor"],
+                key="trend_agg_level",
+                help="Average releaser diff across the selected scope"
+            )
+        with agg_col2:
+            if agg_level == "By Conductor System":
+                # Build conductor options from data
+                _temp_conductors = vacuum_df[sensor_col_trends].dropna().apply(extract_conductor_system).unique()
+                _temp_conductors = sorted([c for c in _temp_conductors if config.get_sugarbush(c) != 'Other'])
+                if _temp_conductors:
+                    agg_filter_value = st.selectbox(
+                        "Select Conductor System",
+                        _temp_conductors,
+                        key="trend_conductor_select"
+                    )
+            elif agg_level == "By Individual Sensor":
+                import re
+                _valid = r'^[A-Z]{1,6}\d'
+                _mask = (vacuum_df[sensor_col_trends].str.match(_valid, na=False) &
+                         ~vacuum_df[sensor_col_trends].apply(config.is_excluded_sensor))
+                _sensors = sorted(vacuum_df[_mask][sensor_col_trends].unique())
+                if _sensors:
+                    agg_filter_value = st.selectbox(
+                        "Select Sensor",
+                        _sensors,
+                        key="trend_sensor_select"
+                    )
 
     if vacuum_col and timestamp_col:
         # Make sure timestamp is datetime
         temp_df = vacuum_df.copy()
         temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
         temp_df = temp_df.dropna(subset=[timestamp_col])
+
+        # Apply aggregation filter
+        if sensor_col_trends:
+            temp_df['_Conductor'] = temp_df[sensor_col_trends].apply(extract_conductor_system)
+            if agg_level == "By Conductor System" and agg_filter_value:
+                temp_df = temp_df[temp_df['_Conductor'] == agg_filter_value]
+            elif agg_level == "By Individual Sensor" and agg_filter_value:
+                temp_df = temp_df[temp_df[sensor_col_trends] == agg_filter_value]
+            # "Entire Sugarbush" = no filter, average everything
 
         if not temp_df.empty:
             # Get temperature data
@@ -461,7 +508,7 @@ def render(vacuum_df, personnel_df):
     # PER-MAINLINE SENSOR DRILL-DOWN CHARTS
     # ============================================================================
 
-    _render_sensor_drilldown(vacuum_df)
+    _render_sensor_drilldown(vacuum_df, personnel_df)
 
     st.divider()
 
@@ -961,11 +1008,75 @@ def _render_stale_sensors(stale_sensors, sensor_col, vacuum_col, releaser_col, t
 
 
 # ============================================================================
+# TAPPER INFO HELPER
+# ============================================================================
+
+def _show_tapper_info(sensor_name, personnel_df):
+    """Show who tapped this sensor/mainline and how many taps, from personnel data."""
+    from utils import find_column
+    from utils.helpers import is_tapping_job, match_mainline_to_sensor
+
+    mainline_col = find_column(personnel_df, 'mainline.', 'mainline', 'Mainline')
+    taps_col = find_column(personnel_df, 'Taps Put In', 'taps put in', 'taps_put_in')
+    emp_col = find_column(personnel_df, 'Employee Name', 'employee', 'Employee')
+    date_col = find_column(personnel_df, 'Date', 'date')
+    job_col = find_column(personnel_df, 'Job', 'Job Code', 'job')
+
+    if not mainline_col or not taps_col:
+        return
+
+    # Match sensor to mainline entries (handles trailing periods, case differences)
+    pdf = personnel_df.copy()
+    pdf[taps_col] = pd.to_numeric(pdf[taps_col], errors='coerce').fillna(0)
+
+    # Filter to tapping jobs with taps > 0 for this mainline
+    tap_rows = pdf[pdf[taps_col] > 0].copy()
+    if job_col:
+        tap_rows = tap_rows[tap_rows[job_col].apply(lambda x: is_tapping_job(str(x)) if pd.notna(x) else False)]
+
+    if tap_rows.empty:
+        return
+
+    # Match: try exact match first, then fuzzy
+    matched = tap_rows[
+        tap_rows[mainline_col].apply(
+            lambda ml: match_mainline_to_sensor(str(ml).strip(), [sensor_name]) is not None
+            if pd.notna(ml) else False
+        )
+    ]
+
+    if matched.empty:
+        return
+
+    total_taps = int(matched[taps_col].sum())
+    tappers = []
+    if emp_col:
+        for emp_name, group in matched.groupby(emp_col):
+            emp_taps = int(group[taps_col].sum())
+            last_date = ''
+            if date_col and date_col in group.columns:
+                dates = pd.to_datetime(group[date_col], errors='coerce').dropna()
+                if not dates.empty:
+                    last_date = dates.max().strftime('%m/%d')
+            tappers.append((emp_name, emp_taps, last_date))
+
+    # Display as a compact info bar
+    tapper_parts = []
+    for name, taps, dt in sorted(tappers, key=lambda x: x[1], reverse=True):
+        dt_str = f" ({dt})" if dt else ""
+        tapper_parts.append(f"**{name}**: {taps} taps{dt_str}")
+
+    tapper_str = " | ".join(tapper_parts) if tapper_parts else ""
+    st.info(f"🌳 **{total_taps} taps** on this line — {tapper_str}")
+
+
+# ============================================================================
 # PER-MAINLINE SENSOR DRILL-DOWN CHARTS
 # ============================================================================
 
-def _render_sensor_drilldown(vacuum_df):
-    """Render per-mainline time-series charts: Last 24H and Last 7 Days."""
+def _render_sensor_drilldown(vacuum_df, personnel_df=None):
+    """Render per-mainline time-series charts: Last 24H, Last 7 Days, Entire Season.
+    Includes tapper info (who tapped, how many taps) from personnel data."""
     st.subheader("🔍 Sensor Detail — Vacuum Over Time")
     st.caption("Select a sensor to view its vacuum and releaser differential history")
 
@@ -987,6 +1098,10 @@ def _render_sensor_drilldown(vacuum_df):
         return
 
     selected_sensor = st.selectbox("Select Sensor", sensors, key="drilldown_sensor")
+
+    # ── Tapper info for selected sensor ───────────────────────────
+    if personnel_df is not None and not personnel_df.empty:
+        _show_tapper_info(selected_sensor, personnel_df)
 
     # Filter data for selected sensor
     sdf = vacuum_df[vacuum_df[sensor_col] == selected_sensor].copy()
