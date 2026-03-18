@@ -21,6 +21,25 @@ from utils.freeze_thaw import get_current_freeze_thaw_status, render_freeze_thaw
 from utils.weather_api import get_hourly_temperature
 
 
+def _to_eastern(ts):
+    """
+    Convert a UTC timestamp to Eastern Time.
+    Handles both EDT (UTC-4, Mar-Nov) and EST (UTC-5, Nov-Mar) automatically.
+    Returns a timezone-naive datetime in Eastern local time.
+    """
+    if pd.isna(ts):
+        return ts
+    try:
+        from zoneinfo import ZoneInfo
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=__import__('datetime').timezone.utc)
+        return ts.astimezone(ZoneInfo('America/New_York')).replace(tzinfo=None)
+    except Exception:
+        month = ts.month
+        is_dst = 3 <= month <= 11
+        return ts + timedelta(hours=-4 if is_dst else -5)
+
+
 def render(vacuum_df, personnel_df):
     """Render the Freezing Report page."""
 
@@ -60,8 +79,8 @@ def render(vacuum_df, personnel_df):
     if releaser_col:
         vdf[releaser_col] = pd.to_numeric(vdf[releaser_col], errors='coerce')
 
-    # Filter to valid maple sensors (2+ uppercase letters + number)
-    valid_pattern = r'^[A-Z]{2,6}\d'
+    # Filter to valid maple sensors (1+ uppercase letters + number; includes M-line)
+    valid_pattern = r'^[A-Z]{1,6}\d'
     vdf = vdf[vdf[sensor_col].str.match(valid_pattern, na=False)]
 
     # Exclude non-maple sensors (birch, relays, typos)
@@ -76,6 +95,30 @@ def render(vacuum_df, personnel_df):
 
     # Get latest reading per sensor
     latest = vdf.sort_values(timestamp_col, ascending=False).groupby(sensor_col).first().reset_index()
+
+    # ── Filter out stale sensors (>24h since last reading) ────────
+    now = vdf[timestamp_col].max()
+    stale_cutoff = now - pd.Timedelta(hours=config.STALE_SENSOR_HOURS)
+    stale_mask = latest[timestamp_col] < stale_cutoff
+    stale_sensors = latest[stale_mask].copy()
+    latest = latest[~stale_mask].copy()
+
+    if not stale_sensors.empty:
+        with st.expander(f"⚠️ Not Reporting — {len(stale_sensors)} sensors (last reading >24h ago)"):
+            st.caption("These sensors have not sent data in the last 24 hours and are excluded from analysis.")
+            stale_display = stale_sensors[[sensor_col, vacuum_col, timestamp_col]].copy()
+            stale_display[timestamp_col] = stale_display[timestamp_col].apply(
+                lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) else ''
+            )
+            stale_display[vacuum_col] = stale_display[vacuum_col].apply(
+                lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A'
+            )
+            stale_display.columns = ['Sensor', 'Last Vacuum', 'Last Reading']
+            st.dataframe(stale_display, use_container_width=True, hide_index=True)
+
+    if latest.empty:
+        st.warning("All sensors are stale (no readings in the last 24 hours).")
+        return
 
     # ── Identify frozen / critical lines ────────────────────────────
     # A sensor "went to zero" if its latest vacuum reading = 0
@@ -214,7 +257,7 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
         if timestamp_col in cdf.columns:
             ts = pd.to_datetime(cdf[timestamp_col], errors='coerce').dropna()
             if not ts.empty:
-                last_update = ts.max().strftime('%m/%d %H:%M')
+                last_update = _to_eastern(ts.max()).strftime('%m/%d %H:%M ET')
 
         rows.append({
             'Sugarbush': sugarbush,

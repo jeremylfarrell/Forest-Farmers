@@ -180,21 +180,29 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     # Also exclude relay-only and non-mainline sensors defined in config
     latest = latest[~latest[sensor_col].apply(config.is_excluded_sensor)]
 
-    # Clean data
+    # Clean data — include releaser differential for color coding
+    from utils.helpers import get_releaser_column
+    releaser_col = get_releaser_column(latest)
+
     map_data = latest[[sensor_col, lat_col, lon_col]].copy()
     if vacuum_col:
         map_data[vacuum_col] = latest[vacuum_col]
+    if releaser_col:
+        map_data['_releaser_diff'] = pd.to_numeric(latest[releaser_col], errors='coerce')
     if has_site:
         map_data['Site'] = latest['Site']
-    
-    map_data.columns = ['Sensor', 'Latitude', 'Longitude'] + ([vacuum_col] if vacuum_col else []) + (['Site'] if has_site else [])
-    
+
+    map_data.columns = ['Sensor', 'Latitude', 'Longitude'] + \
+                        ([vacuum_col] if vacuum_col else []) + \
+                        (['_releaser_diff'] if releaser_col else []) + \
+                        (['Site'] if has_site else [])
+
     # Convert to numeric and clean
     map_data['Latitude'] = pd.to_numeric(map_data['Latitude'], errors='coerce')
     map_data['Longitude'] = pd.to_numeric(map_data['Longitude'], errors='coerce')
     if vacuum_col:
         map_data['Vacuum'] = pd.to_numeric(map_data[vacuum_col], errors='coerce')
-    
+
     map_data = map_data.dropna(subset=['Latitude', 'Longitude'])
 
     if map_data.empty:
@@ -242,7 +250,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
 
     with col2:
         if vacuum_col:
-            color_options = ["Vacuum Performance"]
+            color_options = ["Releaser Differential"]
             if has_site:
                 color_options.append("Site")
             color_options.append("Freeze Alert")
@@ -393,7 +401,23 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     )
 
     # Add legend based on color mode
-    if has_site and color_by == "Site":
+    if color_by == "Releaser Differential":
+        legend_html = '''
+        <div style="position: fixed;
+                    top: 10px; right: 10px; width: 200px; height: auto;
+                    background-color: white; border:2px solid grey; z-index:9999;
+                    font-size:14px; padding: 10px; border-radius: 5px;">
+        <p style="margin: 0; font-weight: bold; text-align: center;">Releaser Diff</p>
+        <p style="margin: 5px 0;"><span style="color: #228B22; font-size: 20px;">&#9679;</span> Good (&lt;2")</p>
+        <p style="margin: 5px 0;"><span style="color: #DAA520; font-size: 20px;">&#9679;</span> Low Priority (2-5")</p>
+        <p style="margin: 5px 0;"><span style="color: #FF69B4; font-size: 20px;">&#9679;</span> Critical (5-10")</p>
+        <p style="margin: 5px 0;"><span style="color: #8B0000; font-size: 20px;">&#9679;</span> FROZEN (&#8805;10")</p>
+        <p style="margin: 5px 0;"><span style="color: #808080; font-size: 20px;">&#9679;</span> OFF</p>
+        <p style="margin: 5px 0;"><span style="color: #4682B4; font-size: 20px;">&#9679;</span> False Positive</p>
+        </div>
+        '''
+        m.get_root().html.add_child(folium.Element(legend_html))
+    elif has_site and color_by == "Site":
         legend_html = '''
         <div style="position: fixed;
                     top: 10px; right: 10px; width: 150px; height: auto;
@@ -427,9 +451,20 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     # Add markers
     for idx, row in map_data.iterrows():
         # Determine marker color
-        if color_by == "Vacuum Performance" and vacuum_col and 'Vacuum' in row:
-            vacuum = row['Vacuum']
-            if pd.notna(vacuum):
+        if color_by == "Releaser Differential" and vacuum_col and 'Vacuum' in row:
+            vacuum = row.get('Vacuum')
+            rel_diff = row.get('_releaser_diff')
+            if pd.notna(vacuum) and pd.notna(rel_diff):
+                hex_color, label = config.get_releaser_diff_color(vacuum, rel_diff)
+                # Map hex colors to folium color names
+                color_map = {
+                    '#228B22': 'green', '#DAA520': 'orange', '#FF69B4': 'pink',
+                    '#8B0000': 'darkred', '#808080': 'gray', '#4682B4': 'blue',
+                }
+                color = color_map.get(hex_color, 'gray')
+                status = f"{label} (Diff: {rel_diff:.1f}\")"
+            elif pd.notna(vacuum):
+                # Fallback to raw vacuum if no releaser diff
                 if vacuum >= config.VACUUM_EXCELLENT:
                     color = 'green'
                     status = f"🟢 Excellent ({vacuum:.1f}\")"

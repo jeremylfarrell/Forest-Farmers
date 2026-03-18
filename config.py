@@ -138,17 +138,28 @@ FREEZE_DROP_RATE_LIKELY = 0.50     # Drop rate > 50% = "LIKELY LEAK"
 FREEZE_DROP_RATE_WATCH = 0.25      # Drop rate > 25% = "WATCH"
 
 # Releaser differential color thresholds (inches)
-# Used for the freezing report — 3-band scale per manager request
-# Good: 0-2"  (green)
-# Low Priority: 2-5"  (yellow/amber)
-# Critical: >5"  (red/pink)
+# Uses absolute value of releaser diff for the scale.
+# Data values are SIGNED: negative = normal loss, positive > 1 = sensor error.
+# Rules (from manager meeting 2025-03-17):
+#   abs(diff) < 2   → Good (green)
+#   abs(diff) 2-5   → Low Priority (amber)
+#   abs(diff) 5-10  → Critical (pink)
+#   abs(diff) ≥ 10  → FROZEN (dark red)
+#   positive > 1    → False Positive (sensor error) — clamped to 1 for display
+#   vacuum ≈ 0 AND abs(diff) ≤ 1 → Pump OFF
 RELEASER_DIFF_THRESHOLDS = [
-    (2.0,  '#228B22', 'Good'),         # 0-2"  — green
-    (5.0,  '#DAA520', 'Low Priority'), # 2-5"  — amber
-    (99.0, '#FF69B4', 'Critical'),     # > 5"  — pink
+    (2.0,  '#228B22', 'Good'),         # abs 0-2"  — green
+    (5.0,  '#DAA520', 'Low Priority'), # abs 2-5"  — amber
+    (10.0, '#FF69B4', 'Critical'),     # abs 5-10" — pink
+    (99.0, '#8B0000', 'FROZEN'),       # abs ≥ 10" — dark red (line frozen)
 ]
-RELEASER_FROZEN_COLOR = '#8B0000'     # Dark red — vacuum=0 but releaser diff > 0 (frozen)
-RELEASER_OFF_COLOR = '#808080'        # Gray — vacuum=0 AND releaser diff=0 (pump off)
+RELEASER_FROZEN_COLOR = '#8B0000'     # Dark red — frozen line
+RELEASER_OFF_COLOR = '#808080'        # Gray — pump off (vacuum=0 AND diff≈0)
+RELEASER_FALSE_POS_COLOR = '#4682B4'  # Steel blue — sensor error (positive > 1)
+
+# Stale sensor threshold: sensors not reporting within this many hours are
+# separated into a "not reporting" list and excluded from main analysis.
+STALE_SENSOR_HOURS = 24
 
 # ============================================================================
 # ADVANCED SETTINGS - For developers
@@ -185,7 +196,7 @@ EXCLUDED_SENSOR_PREFIXES = {'AB', 'BFB', 'BMMD', 'ZGAS', 'ZGAN', 'GDS'}
 # Each sugarbush is a named location containing one or more conductor systems.
 # A conductor system is identified by the letter prefix of the sensor name.
 SUGARBUSH_MAP = {
-    'Drew Mt': ['DMA', 'DMB', 'DMC', 'DMD'],        # DM* sensors
+    'Drew Mt': ['DMA', 'DMAS', 'DMB', 'DMC', 'DMD'],  # DM* sensors
     'Groton':  ['GA', 'GB', 'GC', 'GD'],             # G* sensors (GC includes GCE, GCW)
     'Devils East': ['DHE'],
     'Devils West': ['DHW'],
@@ -265,10 +276,19 @@ def get_releaser_diff_color(vacuum, releaser_diff):
     Return (hex_color, label) for a sensor based on vacuum and releaser
     differential, using the graduated color scale.
 
-    Rules:
-    - vacuum=0 AND releaser_diff=0 → gray (pump OFF, not frozen)
-    - vacuum=0 AND releaser_diff > 0 → dark red (FROZEN)
-    - otherwise → graduated green→yellow→pink by releaser_diff value
+    The releaser differential is SIGNED:
+      - Negative values = normal (sensor reads less vacuum than releaser)
+      - More negative = worse (bigger vacuum loss in the line)
+      - Positive > 1 = sensor error / false reading
+
+    Rules (from manager meeting 2025-03-17):
+    - vacuum ≈ 0 AND abs(diff) ≤ 1 → gray (pump OFF)
+    - vacuum ≈ 0 AND abs(diff) > 1  → dark red (FROZEN — pump on but line frozen)
+    - positive diff > 1              → steel blue (False Positive — sensor error)
+    - abs(diff) < 2                  → green (Good)
+    - abs(diff) 2–5                  → amber (Low Priority)
+    - abs(diff) 5–10                 → pink (Critical)
+    - abs(diff) ≥ 10                 → dark red (FROZEN)
     """
     import math
     if vacuum is None or releaser_diff is None:
@@ -277,17 +297,23 @@ def get_releaser_diff_color(vacuum, releaser_diff):
        (isinstance(releaser_diff, float) and math.isnan(releaser_diff)):
         return (RELEASER_OFF_COLOR, 'No Data')
 
-    # Vacuum is zero
-    if vacuum <= 0.01:
-        if releaser_diff <= 0.01:
-            return (RELEASER_OFF_COLOR, 'OFF')
-        else:
-            return (RELEASER_FROZEN_COLOR, 'FROZEN')
+    # Pump off: vacuum ≈ 0 AND releaser diff ≈ 0
+    if vacuum <= 0.01 and abs(releaser_diff) <= 1.0:
+        return (RELEASER_OFF_COLOR, 'OFF')
 
-    # Graduated scale by releaser differential
+    # Vacuum is zero but releaser diff is significant → line is frozen
+    if vacuum <= 0.01 and abs(releaser_diff) > 1.0:
+        return (RELEASER_FROZEN_COLOR, 'FROZEN')
+
+    # Positive diff > 1 = sensor error / false reading
+    if releaser_diff > 1.0:
+        return (RELEASER_FALSE_POS_COLOR, 'False Positive')
+
+    # Graduated scale by absolute value of releaser differential
+    abs_diff = abs(releaser_diff)
     for threshold, color, label in RELEASER_DIFF_THRESHOLDS:
-        if releaser_diff < threshold:
+        if abs_diff < threshold:
             return (color, label)
 
-    # Fallback (should not reach here)
-    return ('#FF69B4', 'Critical')
+    # Fallback (abs_diff ≥ 99 — should not happen)
+    return (RELEASER_FROZEN_COLOR, 'FROZEN')

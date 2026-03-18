@@ -233,19 +233,23 @@ def render_sidebar():
         # Page selection - PRIMARY NAVIGATION
         st.subheader("📄 Pages")
 
-        # Main pages
+        # All pages in a single radio group to avoid navigation conflicts
+        # between two radio groups (fixes bug where clicking between groups
+        # didn't switch the active page).
+        all_pages = [
+            "🌳 Tapping Operations",
+            "👥 Employee Hours",
+            "🛠️ Repairs Needed",
+            "🌍 Interactive Map",
+            "📈 Tap History",
+            "🌡️ Tapping by Temperature",
+            "🧊 Freezing Report",
+            "📋 Manager Data Review",
+        ]
+
         page = st.radio(
             "Select Page",
-            [
-                "🌳 Tapping Operations",
-                "👥 Employee Hours",
-                "🛠️ Repairs Needed",
-                "🌍 Interactive Map",
-                "📈 Tap History",
-                "🌡️ Tapping by Temperature",
-                "🧊 Freezing Report",
-                "📋 Manager Data Review"
-            ],
+            all_pages,
             label_visibility="collapsed",
             key="main_pages"
         )
@@ -253,22 +257,23 @@ def render_sidebar():
         st.markdown("---")
         st.caption("⚠️ **Needs Work**")
 
-        # Secondary pages that need work
+        other_pages = [
+            "🔧 Vacuum Performance",
+            "🔧 Maintenance & Leaks",
+            "⚠️ Alerts",
+            "🌡️ Sap Flow Forecast",
+            "📊 Raw Data",
+        ]
+
         page2 = st.radio(
             "Other Pages",
-            [
-                "🔧 Vacuum Performance",
-                "⭐ Leak Checking",
-                "🔧 Maintenance & Leaks",
-                "⚠️ Alerts",
-                "🌡️ Sap Flow Forecast",
-                "📊 Raw Data"
-            ],
+            other_pages,
             label_visibility="collapsed",
             key="other_pages"
         )
 
-        # Handle page selection from either radio group
+        # Handle page selection from either radio group.
+        # Track which group was last clicked so the active page follows the user.
         if "last_main_page" not in st.session_state:
             st.session_state.last_main_page = page
         if "last_other_page" not in st.session_state:
@@ -357,7 +362,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.45 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.49 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
@@ -548,8 +553,6 @@ def main():
         tapping.render(approved_only_df, vacuum_df)
     elif page == "👥 Employee Hours":
         employees.render(approved_only_df, site_filter)
-    elif page == "⭐ Leak Checking":
-        employee_effectiveness.render(approved_only_df, vacuum_df)
     elif page == "🔧 Maintenance & Leaks":
         maintenance.render(vacuum_df, approved_only_df)
     elif page == "🛠️ Repairs Needed":

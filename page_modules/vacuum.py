@@ -99,7 +99,7 @@ def render(vacuum_df, personnel_df):
     # VACUUM TRENDS SECTION - DAILY VIEW WITH TEMPERATURE AWARENESS
     # ============================================================================
 
-    st.subheader("📈 Vacuum Trends - Daily View")
+    st.subheader("📈 Releaser Differential — Daily View")
 
     vacuum_col = get_vacuum_column(vacuum_df)
     timestamp_col = find_column(
@@ -107,6 +107,8 @@ def render(vacuum_df, personnel_df):
         'Last communication', 'Last Communication', 'Timestamp', 'timestamp',
         'time', 'datetime', 'last_communication'
     )
+
+    releaser_col = get_releaser_column(vacuum_df)
 
     if vacuum_col and timestamp_col:
         # Make sure timestamp is datetime
@@ -121,18 +123,23 @@ def render(vacuum_df, personnel_df):
             # Create date column
             temp_df['Date'] = temp_df[timestamp_col].dt.date
 
-            # Aggregate by date
-            daily = temp_df.groupby('Date')[vacuum_col].mean().reset_index()
+            # Aggregate by date — show releaser diff (primary) + vacuum + temp
+            agg_cols = {vacuum_col: 'mean'}
+            if releaser_col:
+                temp_df[releaser_col] = pd.to_numeric(temp_df[releaser_col], errors='coerce')
+                agg_cols[releaser_col] = 'mean'
+
+            daily = temp_df.groupby('Date').agg(agg_cols).reset_index()
             daily = daily.sort_values('Date').tail(7)
-            
+
             if temp_data is not None:
                 # Merge with temperature data
                 temp_data['Date'] = temp_data['Date'].dt.date
                 daily = daily.merge(temp_data[['Date', 'High', 'Above_Freezing']], on='Date', how='left')
-                
+
                 # Filter to only days above freezing for weekly view
                 daily_above_freezing = daily[daily['Above_Freezing'] == True].copy()
-                
+
                 if len(daily_above_freezing) > 0:
                     st.caption("📊 Showing only days with temps above freezing (optimal sap flow)")
                     display_daily = daily_above_freezing
@@ -141,27 +148,38 @@ def render(vacuum_df, personnel_df):
                     display_daily = daily
             else:
                 display_daily = daily
-                st.caption("📊 7-day vacuum trend (temperature data unavailable)")
+                st.caption("📊 7-day trend (temperature data unavailable)")
 
             if len(display_daily) > 0:
                 # Convert date to datetime for proper chart display
                 display_daily['Date'] = pd.to_datetime(display_daily['Date'])
 
-                # Create nice chart with plotly for better control
                 fig = go.Figure()
-                
-                # Add vacuum trace
+
+                # PRIMARY: Releaser differential (the key metric per manager)
+                if releaser_col and releaser_col in display_daily.columns:
+                    fig.add_trace(go.Scatter(
+                        x=display_daily['Date'],
+                        y=display_daily[releaser_col],
+                        mode='lines+markers',
+                        name='Avg Releaser Diff',
+                        line=dict(color='#C43E00', width=3),
+                        marker=dict(size=10),
+                        hovertemplate='<b>%{x|%B %d}</b><br>Rel Diff: %{y:.1f}"<extra></extra>'
+                    ))
+
+                # Secondary: Vacuum (lighter)
                 fig.add_trace(go.Scatter(
                     x=display_daily['Date'],
                     y=display_daily[vacuum_col],
                     mode='lines+markers',
                     name='Avg Vacuum',
-                    line=dict(color='#2196F3', width=3),
-                    marker=dict(size=10),
+                    line=dict(color='#2196F3', width=2, dash='dot'),
+                    marker=dict(size=6),
                     hovertemplate='<b>%{x|%B %d}</b><br>Vacuum: %{y:.1f}"<extra></extra>'
                 ))
-                
-                # Add temperature info if available
+
+                # Temperature on secondary axis
                 if 'High' in display_daily.columns:
                     fig.add_trace(go.Scatter(
                         x=display_daily['Date'],
@@ -172,7 +190,7 @@ def render(vacuum_df, personnel_df):
                         yaxis='y2',
                         hovertemplate='<b>%{x|%B %d}</b><br>High: %{y:.0f}°F<extra></extra>'
                     ))
-                
+
                 # Add freeze/thaw day highlighting (blue bands)
                 add_freeze_bands_to_figure(fig, temp_data, annotate=True)
 
@@ -186,10 +204,9 @@ def render(vacuum_df, personnel_df):
                         yref="y2"
                     )
 
-                # Update layout
                 fig.update_layout(
                     yaxis=dict(
-                        title="Average Vacuum (inches)",
+                        title="Vacuum / Releaser Diff (inches)",
                         side='left'
                     ),
                     yaxis2=dict(
@@ -211,11 +228,14 @@ def render(vacuum_df, personnel_df):
                 with col1:
                     st.metric("Days Shown", len(display_daily))
                 with col2:
-                    st.metric("Average", f"{display_daily[vacuum_col].mean():.1f}\"")
+                    if releaser_col and releaser_col in display_daily.columns:
+                        st.metric("Avg Rel Diff", f"{display_daily[releaser_col].mean():.1f}\"")
+                    else:
+                        st.metric("Average", f"{display_daily[vacuum_col].mean():.1f}\"")
                 with col3:
-                    st.metric("Highest", f"{display_daily[vacuum_col].max():.1f}\"")
+                    st.metric("Avg Vacuum", f"{display_daily[vacuum_col].mean():.1f}\"")
                 with col4:
-                    st.metric("Lowest", f"{display_daily[vacuum_col].min():.1f}\"")
+                    st.metric("Lowest Vacuum", f"{display_daily[vacuum_col].min():.1f}\"")
             else:
                 st.info("Not enough data for trend chart (need at least 1 day)")
         else:
@@ -240,38 +260,86 @@ def render(vacuum_df, personnel_df):
         temp_df = vacuum_df.copy()
         temp_df[timestamp_col] = pd.to_datetime(temp_df[timestamp_col], errors='coerce')
         temp_df = temp_df.dropna(subset=[timestamp_col])
-        
+        if releaser_col:
+            temp_df[releaser_col] = pd.to_numeric(temp_df[releaser_col], errors='coerce')
+
         # Get available dates
         available_dates = sorted(temp_df[timestamp_col].dt.date.unique(), reverse=True)
-        
+
         if len(available_dates) > 0:
             selected_date = st.selectbox(
                 "Choose a date to see hourly breakdown:",
                 options=available_dates,
                 format_func=lambda x: x.strftime('%A, %B %d, %Y')
             )
-            
+
             # Filter to selected date
             day_data = temp_df[temp_df[timestamp_col].dt.date == selected_date].copy()
-            
+
             if not day_data.empty:
                 # Create hour column
                 day_data['Hour'] = day_data[timestamp_col].dt.hour
-                
-                # Aggregate by hour
-                hourly = day_data.groupby('Hour')[vacuum_col].mean().reset_index()
+
+                # Aggregate by hour — vacuum + releaser diff
+                agg_dict = {vacuum_col: 'mean'}
+                if releaser_col and releaser_col in day_data.columns:
+                    agg_dict[releaser_col] = 'mean'
+                hourly = day_data.groupby('Hour').agg(agg_dict).reset_index()
                 hourly = hourly.sort_values('Hour')
-                
-                # Create hourly chart
-                fig = go.Figure()
-                
-                fig.add_trace(go.Bar(
-                    x=hourly['Hour'],
-                    y=hourly[vacuum_col],
-                    marker_color='#4CAF50',
-                    hovertemplate='<b>Hour %{x}:00</b><br>Vacuum: %{y:.1f}"<extra></extra>'
-                ))
-                
+
+                # Get hourly temperature for the selected date
+                from utils.weather_api import get_hourly_temperature
+                hourly_temp = get_hourly_temperature(days=2, site=viewing_site or 'NY')
+
+                fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                # Vacuum bars
+                fig.add_trace(
+                    go.Bar(
+                        x=hourly['Hour'],
+                        y=hourly[vacuum_col],
+                        name='Vacuum',
+                        marker_color='#4CAF50',
+                        hovertemplate='<b>Hour %{x}:00</b><br>Vacuum: %{y:.1f}"<extra></extra>'
+                    ),
+                    secondary_y=False,
+                )
+
+                # Releaser differential line
+                if releaser_col and releaser_col in hourly.columns:
+                    fig.add_trace(
+                        go.Scatter(
+                            x=hourly['Hour'],
+                            y=hourly[releaser_col],
+                            mode='lines+markers',
+                            name='Releaser Diff',
+                            line=dict(color='#C43E00', width=2),
+                            marker=dict(size=6),
+                            hovertemplate='<b>Hour %{x}:00</b><br>Rel Diff: %{y:.1f}"<extra></extra>'
+                        ),
+                        secondary_y=False,
+                    )
+
+                # Temperature overlay on secondary axis
+                if hourly_temp is not None:
+                    sel_date = pd.Timestamp(selected_date)
+                    day_temps = hourly_temp[
+                        hourly_temp['time'].dt.date == selected_date
+                    ].copy()
+                    if not day_temps.empty:
+                        day_temps['Hour'] = day_temps['time'].dt.hour
+                        fig.add_trace(
+                            go.Scatter(
+                                x=day_temps['Hour'],
+                                y=day_temps['temp'],
+                                mode='lines',
+                                name='Temperature',
+                                line=dict(color='#FF9800', width=2, dash='dot'),
+                                hovertemplate='<b>Hour %{x}:00</b><br>%{y:.0f}°F<extra></extra>'
+                            ),
+                            secondary_y=True,
+                        )
+
                 fig.update_layout(
                     xaxis=dict(
                         title="Hour of Day",
@@ -279,25 +347,30 @@ def render(vacuum_df, personnel_df):
                         tick0=0,
                         dtick=1
                     ),
-                    yaxis_title="Average Vacuum (inches)",
                     height=350,
-                    hovermode='x'
+                    hovermode='x',
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                
+                fig.update_yaxes(title_text="Vacuum / Rel Diff (inches)", secondary_y=False)
+                fig.update_yaxes(title_text="Temperature (°F)", secondary_y=True)
+
                 st.plotly_chart(fig, use_container_width=True)
-                
+
                 # Summary stats
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Hours Recorded", len(hourly))
                 with col2:
-                    st.metric("Daily Average", f"{hourly[vacuum_col].mean():.1f}\"")
+                    if releaser_col and releaser_col in hourly.columns:
+                        st.metric("Avg Rel Diff", f"{hourly[releaser_col].mean():.1f}\"")
+                    else:
+                        st.metric("Daily Average", f"{hourly[vacuum_col].mean():.1f}\"")
                 with col3:
                     best_hour = hourly.loc[hourly[vacuum_col].idxmax(), 'Hour']
-                    st.metric("Best Hour", f"{int(best_hour)}:00")
+                    st.metric("Best Vacuum Hour", f"{int(best_hour)}:00")
                 with col4:
                     worst_hour = hourly.loc[hourly[vacuum_col].idxmin(), 'Hour']
-                    st.metric("Worst Hour", f"{int(worst_hour)}:00")
+                    st.metric("Worst Vacuum Hour", f"{int(worst_hour)}:00")
             else:
                 st.info(f"No data available for {selected_date}")
         else:
@@ -546,9 +619,23 @@ def render(vacuum_df, personnel_df):
         col_names.insert(1, 'Site')
 
     if 'Last_Report' in display.columns:
-        display['Last_Report_Display'] = display['Last_Report'].apply(
-            lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) else "N/A"
-        )
+        def _format_last_report(x):
+            if pd.isna(x):
+                return "N/A"
+            eastern = _to_eastern(x)
+            ts_str = eastern.strftime('%Y-%m-%d %H:%M ET')
+            # Color-code freshness: green (<1h), yellow (<24h), red (>24h)
+            import datetime as _dt
+            now_utc = pd.Timestamp.utcnow()
+            age = now_utc - x if x.tzinfo is None else now_utc.tz_localize('UTC') - x
+            if age < _dt.timedelta(hours=1):
+                return f"🟢 {ts_str}"
+            elif age < _dt.timedelta(hours=24):
+                return f"🟡 {ts_str}"
+            else:
+                return f"🔴 {ts_str}"
+
+        display['Last_Report_Display'] = display['Last_Report'].apply(_format_last_report)
         display_cols.append('Last_Report_Display')
         col_names.append('Last Report')
 
@@ -678,13 +765,15 @@ def _render_freeze_sensor_chart(vacuum_df, temp_data, sensor_list):
 # ============================================================================
 
 def _render_freezing_report(vacuum_df):
-    """Render the freezing report section with graduated releaser differential colors."""
+    """Render the freezing report section with graduated releaser differential colors.
+    Handles SIGNED differentials: negative = normal loss, positive > 1 = sensor error.
+    Filters out stale sensors (>24h since last reading) into a separate section."""
     st.subheader("🧊 Freezing Report — Releaser Differential")
     st.caption(
-        "Color-coded by releaser differential: "
-        "dark green (<1\") to pink (>10\"). "
-        "Dark red = frozen (vacuum 0 but releaser > 0). "
-        "Gray = pump off (both 0)."
+        "Color-coded by releaser differential (absolute value): "
+        "green (<2\"), amber (2-5\"), pink (5-10\"), dark red (≥10\" / frozen). "
+        "Positive values > 1\" flagged as sensor error. "
+        "Gray = pump off. Stale sensors (>24h) shown separately."
     )
 
     sensor_col, vacuum_col, timestamp_col, releaser_col = _get_vacuum_cols(vacuum_df)
@@ -720,36 +809,56 @@ def _render_freezing_report(vacuum_df):
     # Latest reading per sensor
     latest = vdf.sort_values(timestamp_col, ascending=False).groupby(sensor_col).first().reset_index()
 
+    # ── Separate stale sensors (>24h since last reading) ──────────────
+    now = vdf[timestamp_col].max()
+    stale_cutoff = now - pd.Timedelta(hours=config.STALE_SENSOR_HOURS)
+    stale_mask = latest[timestamp_col] < stale_cutoff
+    stale_sensors = latest[stale_mask].copy()
+    latest = latest[~stale_mask].copy()
+
+    if latest.empty:
+        st.warning("All sensors are stale (no readings in last 24 hours).")
+        # Still show stale list
+        if not stale_sensors.empty:
+            _render_stale_sensors(stale_sensors, sensor_col, vacuum_col, releaser_col, timestamp_col)
+        return
+
     # Add conductor system grouping
     latest['Conductor'] = latest[sensor_col].apply(extract_conductor_system)
 
-    # Add color and status using config helper
+    # Add color and status using config helper (now handles signed values)
     latest['_color'], latest['_label'] = zip(
         *latest.apply(lambda r: config.get_releaser_diff_color(r[vacuum_col], r[releaser_col]), axis=1)
     )
+
+    # Clamp positive outliers > 1 to 1 for display so they don't blow out the scale
+    latest['_display_diff'] = latest[releaser_col].clip(upper=1.0)
 
     # Convert timestamps from UTC to Eastern Time before display
     if timestamp_col in latest.columns:
         latest[timestamp_col] = latest[timestamp_col].apply(_to_eastern)
 
-    # Summary metrics (matches manager's 3-band + frozen/off scheme)
+    # Summary metrics
     frozen_count = len(latest[latest['_label'] == 'FROZEN'])
     off_count = len(latest[latest['_label'] == 'OFF'])
     critical_count = len(latest[latest['_label'] == 'Critical'])
     low_priority_count = len(latest[latest['_label'] == 'Low Priority'])
     good_count = len(latest[latest['_label'] == 'Good'])
+    false_pos_count = len(latest[latest['_label'] == 'False Positive'])
 
-    mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
     with mc1:
-        st.metric("🔴 FROZEN", frozen_count)
+        st.metric("🔴 FROZEN (≥10\")", frozen_count)
     with mc2:
-        st.metric("🩷 Critical (>5\")", critical_count)
+        st.metric("🩷 Critical (5-10\")", critical_count)
     with mc3:
         st.metric("🟡 Low Priority (2-5\")", low_priority_count)
     with mc4:
         st.metric("🟢 Good (<2\")", good_count)
     with mc5:
         st.metric("⚫ Pump Off", off_count)
+    with mc6:
+        st.metric("🔵 False Positive", false_pos_count)
 
     # --- Conductor system selector ---
     conductors = sorted(latest['Conductor'].unique())
@@ -762,33 +871,33 @@ def _render_freezing_report(vacuum_df):
         if selected_conductor != "All":
             latest = latest[latest['Conductor'] == selected_conductor]
 
-    # --- Color-coded table ---
-    # Build a Plotly heatmap-style bar chart showing each sensor's status
-    # Sort: FROZEN first, then by releaser diff descending
-    status_order = {'FROZEN': 0, 'Critical': 1, 'Elevated': 2, 'Moderate': 3,
-                    'Acceptable': 4, 'Good': 5, 'Excellent': 6, 'OFF': 7, 'No Data': 8}
+    # --- Color-coded bar chart ---
+    # Sort: FROZEN first, then by abs(releaser diff) descending
+    status_order = {'FROZEN': 0, 'Critical': 1, 'Low Priority': 2,
+                    'Good': 3, 'False Positive': 4, 'OFF': 5, 'No Data': 6}
     latest['_sort'] = latest['_label'].map(status_order).fillna(9)
-    latest = latest.sort_values(['_sort', releaser_col], ascending=[True, False])
+    latest = latest.sort_values(['_sort', releaser_col], ascending=[True, True])
 
-    # Create horizontal bar chart (like CDL freezing report)
+    # Use absolute value for the bar chart (clamped positive outliers)
     fig = go.Figure()
     fig.add_trace(go.Bar(
         y=latest[sensor_col],
-        x=latest[releaser_col].fillna(0),
+        x=latest['_display_diff'].abs().fillna(0),
         orientation='h',
         marker=dict(color=latest['_color']),
         text=latest['_label'],
         textposition='auto',
         hovertemplate=(
             '<b>%{y}</b><br>'
-            'Releaser Diff: %{x:.1f}"<br>'
+            'Releaser Diff: %{customdata:.1f}"<br>'
             'Status: %{text}<extra></extra>'
         ),
+        customdata=latest[releaser_col],
     ))
 
     fig.update_layout(
-        title="Sensors by Releaser Differential",
-        xaxis_title='Releaser Differential (inches)',
+        title="Sensors by Releaser Differential (absolute value)",
+        xaxis_title='|Releaser Differential| (inches)',
         yaxis_title='',
         height=max(300, len(latest) * 22),
         yaxis=dict(autorange='reversed'),
@@ -798,13 +907,14 @@ def _render_freezing_report(vacuum_df):
     st.plotly_chart(fig, use_container_width=True)
 
     # --- Color legend ---
-    legend_cols = st.columns(5)
+    legend_cols = st.columns(6)
     legend_items = [
-        ('#228B22', 'Good (0-2")'),
+        ('#228B22', 'Good (<2")'),
         ('#DAA520', 'Low Priority (2-5")'),
-        ('#FF69B4', 'Critical (>5")'),
-        ('#8B0000', 'FROZEN'),
+        ('#FF69B4', 'Critical (5-10")'),
+        ('#8B0000', 'FROZEN (≥10")'),
         ('#808080', 'OFF'),
+        ('#4682B4', 'False Positive'),
     ]
     for col_w, (color, label) in zip(legend_cols, legend_items):
         with col_w:
@@ -820,9 +930,34 @@ def _render_freezing_report(vacuum_df):
         detail['Vacuum'] = detail['Vacuum'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
         detail['Releaser Diff'] = detail['Releaser Diff'].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
         detail['Last Reading'] = detail['Last Reading'].apply(
-            lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) and hasattr(x, 'strftime') else ''
+            lambda x: x.strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) and hasattr(x, 'strftime') else ''
         )
         st.dataframe(detail, use_container_width=True, hide_index=True, height=400)
+
+    # --- Stale sensors section ---
+    if not stale_sensors.empty:
+        _render_stale_sensors(stale_sensors, sensor_col, vacuum_col, releaser_col, timestamp_col)
+
+
+def _render_stale_sensors(stale_sensors, sensor_col, vacuum_col, releaser_col, timestamp_col):
+    """Render the list of stale sensors (not reporting in last 24h)."""
+    with st.expander(f"⚠️ Not Reporting — {len(stale_sensors)} sensors (last reading >24h ago)"):
+        st.caption(
+            "These sensors have not sent data in the last 24 hours. "
+            "May need battery replacement or have connectivity issues."
+        )
+        display = stale_sensors[[sensor_col, vacuum_col, releaser_col, timestamp_col]].copy() if releaser_col else \
+                  stale_sensors[[sensor_col, vacuum_col, timestamp_col]].copy()
+        display[timestamp_col] = display[timestamp_col].apply(
+            lambda x: _to_eastern(x).strftime('%Y-%m-%d %H:%M ET') if pd.notna(x) and hasattr(x, 'strftime') else ''
+        )
+        display[vacuum_col] = display[vacuum_col].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
+        if releaser_col:
+            display[releaser_col] = display[releaser_col].apply(lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A')
+        col_names = ['Sensor', 'Last Vacuum', 'Last Rel Diff', 'Last Reading'] if releaser_col else \
+                    ['Sensor', 'Last Vacuum', 'Last Reading']
+        display.columns = col_names
+        st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 # ============================================================================
@@ -865,15 +1000,17 @@ def _render_sensor_drilldown(vacuum_df):
         st.info(f"No data for {selected_sensor}")
         return
 
-    # Split into Last 24H and Last 7 Days
+    # Split into Last 24H, Last 7 Days, and Entire Season
     now = sdf[timestamp_col].max()
     last_24h = sdf[sdf[timestamp_col] >= now - pd.Timedelta(hours=24)]
     last_7d = sdf[sdf[timestamp_col] >= now - pd.Timedelta(days=7)]
+    entire_season = sdf  # All available data for this sensor
 
-    # Render two side-by-side charts
-    tab1, tab2 = st.tabs(["Last 24 Hours", "Last 7 Days"])
+    # Render three tabs
+    tab1, tab2, tab3 = st.tabs(["Last 24 Hours", "Last 7 Days", "Entire Season"])
 
-    for tab, data, title in [(tab1, last_24h, "Last 24 Hours"), (tab2, last_7d, "Last 7 Days")]:
+    for tab, data, title in [(tab1, last_24h, "Last 24 Hours"), (tab2, last_7d, "Last 7 Days"),
+                              (tab3, entire_season, "Entire Season")]:
         with tab:
             if data.empty:
                 st.info(f"No data for {title}")
