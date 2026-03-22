@@ -246,14 +246,9 @@ def match_mainline_to_sensor(mainline, sensor_names):
     if pd.isna(mainline) or not mainline:
         return None
     mainline = str(mainline).strip().upper()
-    # Exact match (case-insensitive)
+    # Exact match only (case-insensitive) — substring matching removed because
+    # it caused false matches (e.g. mainline "LHW01" matching sensor "LHW0")
     for sensor in sensor_names:
         if str(sensor).strip().upper() == mainline:
             return sensor
-    # Substring match — only when both strings are ≥3 chars to avoid spurious hits
-    for sensor in sensor_names:
-        sensor_upper = str(sensor).strip().upper()
-        if len(mainline) >= 3 and len(sensor_upper) >= 3:
-            if mainline in sensor_upper or sensor_upper in mainline:
-                return sensor
     return None

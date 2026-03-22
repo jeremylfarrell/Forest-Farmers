@@ -13,6 +13,7 @@ from utils import find_column, get_vacuum_column, match_mainline_to_sensor
 from utils.freeze_thaw import get_current_freeze_thaw_status, detect_freeze_event_drops
 import re
 import math
+import datetime
 
 
 def get_taps_details_by_mainline(personnel_df):
@@ -180,11 +181,22 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     # Also exclude relay-only and non-mainline sensors defined in config
     latest = latest[~latest[sensor_col].apply(config.is_excluded_sensor)]
 
+    # Detect stale sensors (not communicating in last STALE_SENSOR_HOURS)
+    if timestamp_col and timestamp_col in latest.columns:
+        stale_cutoff = pd.Timestamp.now(tz='UTC') - pd.Timedelta(hours=config.STALE_SENSOR_HOURS)
+        # Handle timezone-naive timestamps
+        ts = latest[timestamp_col]
+        if ts.dt.tz is None:
+            stale_cutoff = stale_cutoff.tz_localize(None)
+        latest['_is_stale'] = latest[timestamp_col] < stale_cutoff
+    else:
+        latest['_is_stale'] = False
+
     # Clean data — include releaser differential for color coding
     from utils.helpers import get_releaser_column
     releaser_col = get_releaser_column(latest)
 
-    map_data = latest[[sensor_col, lat_col, lon_col]].copy()
+    map_data = latest[[sensor_col, lat_col, lon_col, '_is_stale']].copy()
     if vacuum_col:
         map_data[vacuum_col] = latest[vacuum_col]
     if releaser_col:
@@ -192,7 +204,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     if has_site:
         map_data['Site'] = latest['Site']
 
-    map_data.columns = ['Sensor', 'Latitude', 'Longitude'] + \
+    map_data.columns = ['Sensor', 'Latitude', 'Longitude', '_is_stale'] + \
                         ([vacuum_col] if vacuum_col else []) + \
                         (['_releaser_diff'] if releaser_col else []) + \
                         (['Site'] if has_site else [])
@@ -316,7 +328,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     with tap_col3:
         if all_dates:
             min_date = min(all_dates)
-            max_date = max(all_dates)
+            max_date = max(max(all_dates), datetime.date.today())
 
             if min_date < max_date:
                 date_filter = st.slider(
@@ -414,6 +426,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         <p style="margin: 5px 0;"><span style="color: #8B0000; font-size: 20px;">&#9679;</span> FROZEN (&#8805;10")</p>
         <p style="margin: 5px 0;"><span style="color: #808080; font-size: 20px;">&#9679;</span> OFF</p>
         <p style="margin: 5px 0;"><span style="color: #4682B4; font-size: 20px;">&#9679;</span> False Positive</p>
+        <p style="margin: 5px 0;"><span style="color: #FFFFFF; font-size: 20px; -webkit-text-stroke: 2px #333;">&#9679;</span> Not Communicating</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -427,6 +440,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         <p style="margin: 5px 0;"><span style="color: #2196F3; font-size: 20px;">●</span> NY</p>
         <p style="margin: 5px 0;"><span style="color: #4CAF50; font-size: 20px;">●</span> VT</p>
         <p style="margin: 5px 0;"><span style="color: #9E9E9E; font-size: 20px;">●</span> UNK</p>
+        <p style="margin: 5px 0;"><span style="color: #FFFFFF; font-size: 20px; -webkit-text-stroke: 2px #333;">●</span> Not Communicating</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -441,6 +455,7 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         <p style="margin: 5px 0;"><span style="color: #f39c12; font-size: 20px;">&#9679;</span> Watch</p>
         <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> OK</p>
         <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Data</p>
+        <p style="margin: 5px 0;"><span style="color: #FFFFFF; font-size: 20px; -webkit-text-stroke: 2px #333;">&#9679;</span> Not Communicating</p>
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
@@ -450,8 +465,11 @@ def render(vacuum_df, personnel_df, repairs_df=None):
 
     # Add markers
     for idx, row in map_data.iterrows():
-        # Determine marker color
-        if color_by == "Releaser Differential" and vacuum_col and 'Vacuum' in row:
+        # Determine marker color — stale sensors override all other color modes
+        if row.get('_is_stale', False):
+            color = 'white'
+            status = "⚪ Not Communicating (>24h)"
+        elif color_by == "Releaser Differential" and vacuum_col and 'Vacuum' in row:
             vacuum = row.get('Vacuum')
             rel_diff = row.get('_releaser_diff')
             if pd.notna(vacuum) and pd.notna(rel_diff):
