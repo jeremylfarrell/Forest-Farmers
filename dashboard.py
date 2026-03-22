@@ -245,6 +245,11 @@ def render_sidebar():
             "🌡️ Tapping by Temperature",
             "🧊 Freezing Report",
             "📋 Manager Data Review",
+            "🔧 Vacuum Performance",
+            "🔧 Maintenance & Leaks",
+            "⚠️ Alerts",
+            "🌡️ Sap Flow Forecast",
+            "📊 Raw Data",
         ]
 
         page = st.radio(
@@ -253,43 +258,6 @@ def render_sidebar():
             label_visibility="collapsed",
             key="main_pages"
         )
-
-        st.markdown("---")
-        st.caption("⚠️ **Needs Work**")
-
-        other_pages = [
-            "🔧 Vacuum Performance",
-            "🔧 Maintenance & Leaks",
-            "⚠️ Alerts",
-            "🌡️ Sap Flow Forecast",
-            "📊 Raw Data",
-        ]
-
-        page2 = st.radio(
-            "Other Pages",
-            other_pages,
-            label_visibility="collapsed",
-            key="other_pages"
-        )
-
-        # Handle page selection from either radio group.
-        # Track which group was last clicked so the active page follows the user.
-        if "last_main_page" not in st.session_state:
-            st.session_state.last_main_page = page
-        if "last_other_page" not in st.session_state:
-            st.session_state.last_other_page = page2
-
-        # Determine which page changed
-        if page != st.session_state.last_main_page:
-            st.session_state.last_main_page = page
-            st.session_state.active_page = page
-        elif page2 != st.session_state.last_other_page:
-            st.session_state.last_other_page = page2
-            st.session_state.active_page = page2
-        elif "active_page" not in st.session_state:
-            st.session_state.active_page = page
-
-        page = st.session_state.active_page
 
         st.divider()
 
@@ -362,7 +330,7 @@ def render_sidebar():
         st.divider()
 
         # Footer info
-        st.caption(f"v9.51 | {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"v9.52 | {datetime.now().strftime('%H:%M:%S')}")
         st.caption("💾 Data cached for 1 hour")
 
     # Get site filter from session state
