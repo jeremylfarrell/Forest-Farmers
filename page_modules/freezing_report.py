@@ -121,20 +121,19 @@ def render(vacuum_df, personnel_df):
         return
 
     # ── Identify frozen / critical lines ────────────────────────────
-    # A sensor "went to zero" if its latest vacuum reading = 0
-    # and its releaser differential > 0 (meaning pump is on but line frozen)
+    # Use the centralized get_releaser_diff_color() for ALL cases so
+    # the freezing report matches the vacuum page and sensor map.
     def _classify_freeze(row):
         vac = row[vacuum_col]
         rel = row[releaser_col] if releaser_col else 0
         if pd.isna(vac):
             return 'No Data'
-        if vac <= 0.01:
-            if releaser_col and pd.notna(rel) and rel <= 0.01:
-                return 'OFF'
-            return 'FROZEN'
         if releaser_col and pd.notna(rel):
             _, label = config.get_releaser_diff_color(vac, rel)
             return label
+        # No releaser data — fall back to vacuum only
+        if vac <= 0.01:
+            return 'FROZEN'
         return 'OK'
 
     latest['Freeze_Status'] = latest.apply(_classify_freeze, axis=1)
@@ -187,18 +186,27 @@ def render(vacuum_df, personnel_df):
     # ── Summary metrics ─────────────────────────────────────────────
     frozen_count = len(latest[latest['Freeze_Status'] == 'FROZEN'])
     critical_count = len(latest[latest['Freeze_Status'] == 'Critical'])
+    low_priority_count = len(latest[latest['Freeze_Status'] == 'Low Priority'])
+    good_count = len(latest[latest['Freeze_Status'] == 'Good'])
     off_count = len(latest[latest['Freeze_Status'] == 'OFF'])
+    false_pos_count = len(latest[latest['Freeze_Status'] == 'False Positive'])
     total_sensors = len(latest)
 
-    mc1, mc2, mc3, mc4 = st.columns(4)
+    mc1, mc2, mc3, mc4, mc5, mc6, mc7 = st.columns(7)
     with mc1:
         st.metric("🔴 FROZEN", frozen_count)
     with mc2:
         st.metric("🩷 Critical", critical_count)
     with mc3:
-        st.metric("⚫ Pump Off", off_count)
+        st.metric("🟡 Low Priority", low_priority_count)
     with mc4:
-        st.metric("Total Sensors", total_sensors)
+        st.metric("🟢 Good", good_count)
+    with mc5:
+        st.metric("⚫ Pump Off", off_count)
+    with mc6:
+        st.metric("🔵 False Pos", false_pos_count)
+    with mc7:
+        st.metric("Total", total_sensors)
 
     st.divider()
 
