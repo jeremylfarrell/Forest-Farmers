@@ -32,7 +32,7 @@ def _classify_status(t2025, t2026):
     Returns (label, css_style) tuple.
     """
     if t2025 > 0 and t2026 == 0:
-        return "Not started"
+        return "No 2026 data"
     if t2025 == 0 and t2026 > 0:
         return "New tapping"
     if t2025 == 0 and t2026 == 0:

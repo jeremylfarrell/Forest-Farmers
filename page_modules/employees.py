@@ -13,12 +13,18 @@ from utils import find_column
 
 
 def get_week_start():
-    """Get Monday midnight of current week (inclusive of Monday entries)"""
-    today = datetime.now()
+    """Get Monday midnight of current week (inclusive of Monday entries).
+    Uses Eastern time so Sunday evening doesn't flip to next week on UTC servers."""
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo('America/New_York'))
+    except Exception:
+        today = datetime.now()
     days_since_monday = today.weekday()  # Monday = 0
     monday = today - timedelta(days=days_since_monday)
     # Use midnight (00:00) so date-only entries like '2026-03-16' are included
-    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Return naive datetime so it compares correctly with naive date columns
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
 
 def render(personnel_df, site_filter="All Sites"):

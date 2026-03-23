@@ -446,7 +446,7 @@ def apply_custom_css():
     [data-testid="stDataFrame"] > div > div,
     [data-testid="stDataEditor"] > div > div,
     [data-testid="glideDataEditor"] {
-        padding-right: 20px !important;
+        padding-right: 40px !important;
     }
 
     </style>

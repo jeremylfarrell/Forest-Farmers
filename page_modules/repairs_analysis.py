@@ -12,7 +12,7 @@ import plotly.express as px
 from datetime import datetime
 
 from data_loader import save_repairs_updates, save_repair_locations
-from metrics import calculate_repair_cost_breakdown
+from metrics import calculate_repair_cost_breakdown, calculate_total_repair_costs
 from utils import extract_conductor_system, find_column, match_mainline_to_sensor
 
 
@@ -69,23 +69,21 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
     st.divider()
 
-    # --- Cost Summary by Job Code ---
+    # --- Cost Summary by Job Code (season-wide totals from ALL personnel data) ---
+    season_costs = calculate_total_repair_costs(personnel_df)
     cost_df = calculate_repair_cost_breakdown(personnel_df, df)
-    if not cost_df.empty:
+
+    if season_costs['Total_Cost'] > 0 or not cost_df.empty:
         st.subheader("Cost Summary")
-        st.caption(f"Costs = hours × rate × {config.LABOR_OVERHEAD_MULTIPLIER} (includes workers comp, payroll overhead). Cost/Tap uses **Fixing Issues** cost only.")
+        st.caption(f"Costs = hours × rate × {config.LABOR_OVERHEAD_MULTIPLIER} (includes workers comp, payroll overhead)")
 
-        total_fix = cost_df['Fix_Cost'].sum()
-        total_leak = cost_df['LeakCheck_Cost'].sum()
-        total_all = cost_df['Total_Cost'].sum()
-        total_fix_hours = cost_df['Fix_Hours'].sum()
-        total_leak_hours = cost_df['LeakCheck_Hours'].sum()
+        total_fix = season_costs['Fix_Cost']
+        total_leak = season_costs['LeakCheck_Cost']
+        total_all = season_costs['Total_Cost']
+        total_fix_hours = season_costs['Fix_Hours']
+        total_leak_hours = season_costs['LeakCheck_Hours']
 
-        # Taps for cost/tap calculation
-        repairs_with_fix = cost_df[cost_df['Fix_Cost'] > 0]
-        avg_cpt = repairs_with_fix['Cost_Per_Tap'].mean() if not repairs_with_fix.empty else 0
-
-        cost_col1, cost_col2, cost_col3, cost_col4 = st.columns(4)
+        cost_col1, cost_col2, cost_col3 = st.columns(3)
         with cost_col1:
             st.metric("Fixing Issues Cost", f"${total_fix:,.2f}",
                        help="Cost of 'Fixing Identified Tubing Issues' job code — going back to fix known problems")
@@ -94,21 +92,31 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                        help="Cost of 'Maple Tubing Inseason Repairs' job code — finding issues that cause low vacuum")
         with cost_col3:
             st.metric("Total Cost", f"${total_all:,.2f}")
-        with cost_col4:
-            st.metric("Avg Fix Cost/Tap", f"${avg_cpt:,.2f}",
-                       help="Fixing cost only — does not include leak checking cost")
 
         with st.expander("Hours breakdown"):
             st.markdown(f"- **Fixing Issues:** {total_fix_hours:.1f}h (${total_fix:,.2f})")
             st.markdown(f"- **Leak Checking:** {total_leak_hours:.1f}h (${total_leak:,.2f})")
+            st.markdown(f"- **Total:** {season_costs['Total_Hours']:.1f}h (${total_all:,.2f})")
 
-        # Merge cost data into main df for display
-        df = df.merge(
-            cost_df[['Repair ID', 'Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']],
-            on='Repair ID', how='left'
-        )
-        for c in ['Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']:
-            df[c] = df[c].fillna(0)
+        if not cost_df.empty:
+            with st.expander("Per-repair cost breakdown"):
+                repair_cost_display = cost_df[cost_df['Total_Cost'] > 0].copy()
+                if not repair_cost_display.empty:
+                    repair_cost_display['Fix_Cost'] = repair_cost_display['Fix_Cost'].apply(lambda x: f"${x:,.2f}")
+                    repair_cost_display['LeakCheck_Cost'] = repair_cost_display['LeakCheck_Cost'].apply(lambda x: f"${x:,.2f}")
+                    repair_cost_display['Total_Cost'] = repair_cost_display['Total_Cost'].apply(lambda x: f"${x:,.2f}")
+                    repair_cost_display['Cost_Per_Tap'] = repair_cost_display['Cost_Per_Tap'].apply(lambda x: f"${x:,.2f}")
+                    st.dataframe(repair_cost_display, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No per-repair costs matched. Season totals above include all personnel entries with fixing/leak-checking job codes.")
+
+            # Merge cost data into main df for display
+            df = df.merge(
+                cost_df[['Repair ID', 'Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']],
+                on='Repair ID', how='left'
+            )
+            for c in ['Fix_Cost', 'LeakCheck_Cost', 'Total_Cost', 'Cost_Per_Tap']:
+                df[c] = df[c].fillna(0)
 
     st.divider()
 

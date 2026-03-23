@@ -761,6 +761,64 @@ def calculate_repair_cost_breakdown(personnel_df, repairs_df):
     return pd.DataFrame(results)
 
 
+def calculate_total_repair_costs(personnel_df):
+    """
+    Calculate total season-wide repair costs directly from personnel data.
+
+    Unlike calculate_repair_cost_breakdown() which matches per-repair, this sums
+    ALL hours × rate × LABOR_OVERHEAD_MULTIPLIER for fixing/leak-checking job codes
+    across the entire season — matching the manager's Excel calculation.
+
+    Returns:
+        dict with keys: Fix_Cost, Fix_Hours, LeakCheck_Cost, LeakCheck_Hours,
+                        Total_Cost, Total_Hours
+    """
+    from utils import find_column
+
+    result = {
+        'Fix_Cost': 0, 'Fix_Hours': 0,
+        'LeakCheck_Cost': 0, 'LeakCheck_Hours': 0,
+        'Total_Cost': 0, 'Total_Hours': 0,
+    }
+
+    if personnel_df.empty:
+        return result
+
+    hours_col = find_column(personnel_df, 'Hours', 'hours')
+    rate_col = find_column(personnel_df, 'Rate', 'rate', 'pay rate')
+    job_col = find_column(personnel_df, 'Job', 'job', 'Job Code', 'jobcode')
+
+    if not all([hours_col, job_col]):
+        return result
+
+    p = personnel_df.copy()
+    p['_hours'] = pd.to_numeric(p[hours_col], errors='coerce').fillna(0)
+    p['_rate'] = pd.to_numeric(p[rate_col], errors='coerce').fillna(0) if rate_col else 0
+    p['_job'] = p[job_col].astype(str).str.lower()
+
+    fixing_keywords = ['fixing identified tubing', 'already identified tubing issue']
+    leak_keywords = ['inseason tubing repair', 'maple tubing inseason', 'leak check']
+
+    p['_is_fixing'] = p['_job'].apply(lambda j: any(kw in j for kw in fixing_keywords))
+    p['_is_leak'] = p['_job'].apply(
+        lambda j: any(kw in j for kw in leak_keywords) and not any(kw in j for kw in fixing_keywords)
+    )
+
+    overhead = config.LABOR_OVERHEAD_MULTIPLIER
+
+    fixing = p[p['_is_fixing']]
+    leak = p[p['_is_leak']]
+
+    result['Fix_Hours'] = round(fixing['_hours'].sum(), 1)
+    result['Fix_Cost'] = round((fixing['_hours'] * fixing['_rate'] * overhead).sum(), 2)
+    result['LeakCheck_Hours'] = round(leak['_hours'].sum(), 1)
+    result['LeakCheck_Cost'] = round((leak['_hours'] * leak['_rate'] * overhead).sum(), 2)
+    result['Total_Hours'] = round(result['Fix_Hours'] + result['LeakCheck_Hours'], 1)
+    result['Total_Cost'] = round(result['Fix_Cost'] + result['LeakCheck_Cost'], 2)
+
+    return result
+
+
 def format_metric_value(value, metric_type):
     """
     Format a metric value for display
