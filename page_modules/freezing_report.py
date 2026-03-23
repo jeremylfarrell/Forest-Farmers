@@ -137,6 +137,14 @@ def render(vacuum_df, personnel_df):
         return 'OK'
 
     latest['Freeze_Status'] = latest.apply(_classify_freeze, axis=1)
+
+    # ── Mark stale readings (>2h old) as untrustworthy ────────────
+    # These sensors have data but it's too old to rely on during
+    # rapidly changing freeze/thaw conditions.
+    stale_2h_cutoff = now - pd.Timedelta(hours=2)
+    stale_2h_mask = latest[timestamp_col] < stale_2h_cutoff
+    latest.loc[stale_2h_mask, 'Freeze_Status'] = 'Stale (>2h)'
+
     latest['Conductor'] = latest[sensor_col].apply(extract_conductor_system)
 
     # Find when each sensor first went to zero (freeze order ranking)
@@ -190,15 +198,16 @@ def render(vacuum_df, personnel_df):
     good_count = len(latest[latest['Freeze_Status'] == 'Good'])
     off_count = len(latest[latest['Freeze_Status'] == 'OFF'])
     false_pos_count = len(latest[latest['Freeze_Status'] == 'False Positive'])
+    stale_2h_count = len(latest[latest['Freeze_Status'] == 'Stale (>2h)'])
     total_sensors = len(latest)
 
-    mc1, mc2, mc3, mc4, mc5, mc6, mc7 = st.columns(7)
+    mc1, mc2, mc3, mc4, mc5, mc6, mc7, mc8 = st.columns(8)
     with mc1:
         st.metric("🔴 FROZEN", frozen_count)
     with mc2:
         st.metric("🩷 Critical", critical_count)
     with mc3:
-        st.metric("🟡 Low Priority", low_priority_count)
+        st.metric("🟡 Low Pri", low_priority_count)
     with mc4:
         st.metric("🟢 Good", good_count)
     with mc5:
@@ -206,6 +215,8 @@ def render(vacuum_df, personnel_df):
     with mc6:
         st.metric("🔵 False Pos", false_pos_count)
     with mc7:
+        st.metric("🟠 Stale >2h", stale_2h_count)
+    with mc8:
         st.metric("Total", total_sensors)
 
     st.divider()
@@ -296,6 +307,14 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
         })
 
     overview_df = pd.DataFrame(rows)
+
+    # Hide conductors with 0 matching lines when a status filter is active
+    overview_df = overview_df[overview_df['Total Lines'] > 0]
+
+    if overview_df.empty:
+        st.info("No sensors match the current filter.")
+        return
+
     overview_df = overview_df.sort_values(['Sugarbush', 'Priority Lines'], ascending=[True, False])
 
     # Highlight rows with frozen/critical
@@ -311,6 +330,49 @@ def _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, t
         use_container_width=True, hide_index=True
     )
 
+    # ── Sensor-level detail table (always shown, especially useful
+    #    when filtering by status to see individual mainlines) ─────
+    st.subheader("Sensor Detail")
+
+    detail_cols = [sensor_col, 'Conductor', 'Freeze_Status', vacuum_col]
+    if releaser_col:
+        detail_cols.append(releaser_col)
+    detail_cols.extend([timestamp_col, 'Taps'])
+
+    detail = latest[detail_cols].copy()
+
+    # Format columns for display
+    detail[vacuum_col] = detail[vacuum_col].apply(
+        lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A'
+    )
+    if releaser_col:
+        detail[releaser_col] = detail[releaser_col].apply(
+            lambda x: f'{x:.1f}"' if pd.notna(x) else 'N/A'
+        )
+    detail[timestamp_col] = detail[timestamp_col].apply(
+        lambda x: _to_eastern(x).strftime('%m/%d %H:%M ET') if pd.notna(x) else ''
+    )
+
+    col_rename = {
+        sensor_col: 'Sensor', 'Conductor': 'Conductor',
+        'Freeze_Status': 'Status', vacuum_col: 'Vacuum',
+        timestamp_col: 'Last Reading', 'Taps': 'Taps',
+    }
+    if releaser_col:
+        col_rename[releaser_col] = 'Rel Diff'
+    detail = detail.rename(columns=col_rename)
+
+    # Sort by status severity
+    status_order = {
+        'FROZEN': 0, 'Critical': 1, 'Low Priority': 2, 'Stale (>2h)': 3,
+        'Good': 4, 'OFF': 5, 'False Positive': 6, 'No Data': 7,
+    }
+    detail['_sort'] = detail['Status'].map(status_order).fillna(8)
+    detail = detail.sort_values('_sort').drop(columns='_sort')
+
+    st.dataframe(detail, use_container_width=True, hide_index=True,
+                 height=min(38 + len(detail) * 36, 600))
+
 
 def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
                               releaser_col, timestamp_col, vdf, personnel_df):
@@ -325,7 +387,8 @@ def _render_conductor_report(conductor, latest, sensor_col, vacuum_col,
 
     # Sort: FROZEN first (by freeze rank), then by releaser diff descending
     status_order = {'FROZEN': 0, 'Critical': 1, 'Elevated': 2, 'Moderate': 3,
-                    'Acceptable': 4, 'Good': 5, 'Excellent': 6, 'OFF': 7, 'No Data': 8}
+                    'Acceptable': 4, 'Good': 5, 'Excellent': 6, 'OFF': 7,
+                    'Stale (>2h)': 8, 'No Data': 9}
     cdf['_sort'] = cdf['Freeze_Status'].map(status_order).fillna(9)
     cdf = cdf.sort_values(['_sort', 'Freeze_Rank'], ascending=[True, True])
 
