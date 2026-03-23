@@ -445,8 +445,25 @@ def apply_custom_css():
     /* Center all table cell values so data is visible even near scrollbar */
     [data-testid="stDataFrame"] td,
     [data-testid="stDataEditor"] td,
-    .dvn-scroller td,
-    [data-testid="glideDataEditor"] .gdg-cell {
+    .dvn-scroller td {
+        text-align: center !important;
+    }
+    /* Glide Data Grid (Streamlit's canvas-based tables): center via container */
+    [data-testid="stDataFrame"] [data-testid="glideDataEditor"],
+    [data-testid="stDataEditor"] [data-testid="glideDataEditor"] {
+        --gdg-cell-horizontal-padding: 8px;
+    }
+    /* Also center styled dataframe (pandas Styler) cell content */
+    [data-testid="stDataFrame"] table td,
+    [data-testid="stTable"] td,
+    .stDataFrame td {
+        text-align: center !important;
+    }
+    /* Center column headers too */
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataEditor"] th,
+    [data-testid="stTable"] th,
+    .stDataFrame th {
         text-align: center !important;
     }
 

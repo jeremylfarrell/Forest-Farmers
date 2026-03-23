@@ -479,8 +479,8 @@ def render(personnel_df, vacuum_df=None):
             name='Sensor temp (all days)',
             yaxis='y2',
             mode='lines',
-            line=dict(color='#aaa', width=1, dash='dot'),
-            opacity=0.7,
+            line=dict(color='#000000', width=2),
+            opacity=0.8,
         ))
 
         # Trace 2 — red line: temp only on tapping days, gaps elsewhere
