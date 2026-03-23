@@ -161,6 +161,14 @@ RELEASER_FALSE_POS_COLOR = '#4682B4'  # Steel blue — sensor error (positive > 
 # separated into a "not reporting" list and excluded from main analysis.
 STALE_SENSOR_HOURS = 24
 
+# Current tapping season start date — used by tapping.py and tap_history.py
+# to filter personnel data to the current season only.
+SEASON_START = '2025-12-01'
+
+# Labor cost overhead multiplier — accounts for workers comp, payroll costs, etc.
+# Applied as: hours × rate × LABOR_OVERHEAD_MULTIPLIER
+LABOR_OVERHEAD_MULTIPLIER = 1.15
+
 # ============================================================================
 # ADVANCED SETTINGS - For developers
 # ============================================================================

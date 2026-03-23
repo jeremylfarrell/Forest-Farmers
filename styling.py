@@ -430,6 +430,13 @@ def apply_custom_css():
         background-color: #654321 !important;
     }
 
+    /* Prevent scroll bar from overlapping table data (especially right-side totals) */
+    [data-testid="stDataFrame"] > div > div,
+    [data-testid="stDataEditor"] > div > div,
+    [data-testid="glideDataEditor"] {
+        padding-right: 20px !important;
+    }
+
     </style>
     """, unsafe_allow_html=True)
 

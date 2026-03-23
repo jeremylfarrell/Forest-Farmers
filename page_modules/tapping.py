@@ -44,10 +44,11 @@ def render(personnel_df, vacuum_df):
         st.error("Missing required columns in personnel data")
         return
 
-    # Prepare data
+    # Prepare data — filter to current season only (matches tap_history.py)
     df = personnel_df.copy()
     df['Date'] = pd.to_datetime(df[date_col], errors='coerce')
     df = df.dropna(subset=['Date'])
+    df = df[df['Date'] >= pd.Timestamp(config.SEASON_START)]
 
     # Ensure numeric columns
     for col, name in [(taps_in_col, 'Taps_In'), (taps_out_col, 'Taps_Out'),

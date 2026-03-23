@@ -73,7 +73,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
     cost_df = calculate_repair_cost_breakdown(personnel_df, df)
     if not cost_df.empty:
         st.subheader("Cost Summary")
-        st.caption("Costs split by job code type. Cost/Tap uses **Fixing Issues** cost only.")
+        st.caption(f"Costs = hours × rate × {config.LABOR_OVERHEAD_MULTIPLIER} (includes workers comp, payroll overhead). Cost/Tap uses **Fixing Issues** cost only.")
 
         total_fix = cost_df['Fix_Cost'].sum()
         total_leak = cost_df['LeakCheck_Cost'].sum()
@@ -265,8 +265,8 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
                 'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
                 'Age (Days)': st.column_config.NumberColumn('Age\n(Days)', disabled=True, width='small'),
-                'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
-                'Description': st.column_config.TextColumn('Description', disabled=True, width='large'),
+                'Mainline': st.column_config.TextColumn('Mainline'),
+                'Description': st.column_config.TextColumn('Description', width='large'),
                 'Found By': st.column_config.TextColumn('Found By', disabled=True),
                 'Status': st.column_config.SelectboxColumn(
                     'Status', options=['Open', 'Completed', 'Deferred'], required=True

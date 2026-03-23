@@ -13,12 +13,12 @@ from utils import find_column
 
 
 def get_week_start():
-    """Get Monday 12:01am of current week"""
+    """Get Monday midnight of current week (inclusive of Monday entries)"""
     today = datetime.now()
     days_since_monday = today.weekday()  # Monday = 0
     monday = today - timedelta(days=days_since_monday)
-    # Set to 12:01am
-    return monday.replace(hour=0, minute=1, second=0, microsecond=0)
+    # Use midnight (00:00) so date-only entries like '2026-03-16' are included
+    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 def render(personnel_df, site_filter="All Sites"):
@@ -156,7 +156,32 @@ def render(personnel_df, site_filter="All Sites"):
     # Employee Hours by State
     st.subheader("⏱️ Employee Hours")
 
-    if has_site and 'Primary_Site' in emp_summary.columns:
+    hours_view = st.radio(
+        "Time Period",
+        ["This Year", "This Week"],
+        horizontal=True,
+        key="emp_hours_period"
+    )
+
+    # If "This Week" selected, recalculate hours from week_data only
+    if hours_view == "This Week" and week_data is not None and hours_col and emp_name_col:
+        week_emp = week_data.groupby(emp_name_col).agg({hours_col: 'sum'}).reset_index()
+        week_emp.columns = ['Employee', 'Total_Hours']
+        if has_site:
+            emp_sites = personnel_df.groupby(emp_name_col)['Site'].agg(
+                Primary_Site=lambda x: x.value_counts().index[0] if len(x) > 0 else 'UNK'
+            ).reset_index()
+            emp_sites.columns = ['Employee', 'Primary_Site']
+            week_emp = week_emp.merge(emp_sites, on='Employee', how='left')
+        week_emp = week_emp[week_emp['Total_Hours'] >= 0.1]
+        week_emp = week_emp.sort_values('Total_Hours', ascending=False)
+        emp_summary_display = week_emp
+        hours_label = "Hours This Week"
+    else:
+        emp_summary_display = emp_summary
+        hours_label = "Total Hours (Season)"
+
+    if has_site and 'Primary_Site' in emp_summary_display.columns:
         # Build tab list — put selected site first
         if site_filter == "VT":
             tab_labels = ["🟩 VT Employees", "🟦 NY Employees"]
@@ -169,7 +194,7 @@ def render(personnel_df, site_filter="All Sites"):
 
         for tab, site_code in zip(tabs, tab_sites):
             with tab:
-                site_employees = emp_summary[emp_summary['Primary_Site'] == site_code].copy()
+                site_employees = emp_summary_display[emp_summary_display['Primary_Site'] == site_code].copy()
                 if not site_employees.empty:
                     st.markdown(f"**{len(site_employees)} employees based in {site_code}**")
 
@@ -180,7 +205,7 @@ def render(personnel_df, site_filter="All Sites"):
                     if 'Total_Hours' in display.columns:
                         display['Total_Hours'] = display['Total_Hours'].apply(lambda x: f"{x:.1f}h")
                         display_cols.append('Total_Hours')
-                        col_names.append('Total Hours')
+                        col_names.append(hours_label)
 
                     display = display[display_cols]
                     display.columns = col_names
@@ -189,14 +214,14 @@ def render(personnel_df, site_filter="All Sites"):
                     st.info(f"No {site_code} employees in data")
     else:
         # No site data, show combined
-        display = emp_summary.copy()
+        display = emp_summary_display.copy()
         display_cols = ['Employee']
         col_names = ['Employee']
 
         if 'Total_Hours' in display.columns:
             display['Total_Hours'] = display['Total_Hours'].apply(lambda x: f"{x:.1f}h")
             display_cols.append('Total_Hours')
-            col_names.append('Total Hours')
+            col_names.append(hours_label)
 
         display = display[display_cols]
         display.columns = col_names

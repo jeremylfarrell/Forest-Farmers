@@ -737,9 +737,10 @@ def calculate_repair_cost_breakdown(personnel_df, repairs_df):
         fixing = matched[matched['_is_fixing']]
         leak_check = matched[matched['_is_leak']]
 
-        fix_cost = (fixing['_hours'] * fixing['_rate']).sum()
+        overhead = config.LABOR_OVERHEAD_MULTIPLIER
+        fix_cost = (fixing['_hours'] * fixing['_rate'] * overhead).sum()
         fix_hours = fixing['_hours'].sum()
-        leak_cost = (leak_check['_hours'] * leak_check['_rate']).sum()
+        leak_cost = (leak_check['_hours'] * leak_check['_rate'] * overhead).sum()
         leak_hours = leak_check['_hours'].sum()
         total_cost = fix_cost + leak_cost
 

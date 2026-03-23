@@ -110,8 +110,7 @@ def get_2026_taps(personnel_df):
     date_col = find_column(df, 'Date', 'date', 'timestamp')
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        season_start = pd.Timestamp('2025-12-01')
-        df = df[df[date_col] >= season_start]
+        df = df[df[date_col] >= pd.Timestamp(config.SEASON_START)]
 
     # Filter to rows with actual mainline entries and taps
     df = df[df['_ml'].str.len() > 0]
@@ -144,8 +143,7 @@ def get_2026_taps_deleted(personnel_df):
     date_col = find_column(df, 'Date', 'date', 'timestamp')
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        season_start = pd.Timestamp('2025-12-01')
-        df = df[df[date_col] >= season_start]
+        df = df[df[date_col] >= pd.Timestamp(config.SEASON_START)]
 
     # Filter to rows with actual mainline entries
     df = df[df['_ml'].str.len() > 0]
@@ -177,8 +175,7 @@ def get_2026_taps_capped(personnel_df):
     date_col = find_column(df, 'Date', 'date', 'timestamp')
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        season_start = pd.Timestamp('2025-12-01')
-        df = df[df[date_col] >= season_start]
+        df = df[df[date_col] >= pd.Timestamp(config.SEASON_START)]
 
     df = df[df['_ml'].str.len() > 0]
     df = df[df['_ml'] != 'nan']
@@ -211,8 +208,7 @@ def get_2026_tappers(personnel_df):
     date_col = find_column(df, 'Date', 'date', 'timestamp')
     if date_col:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        season_start = pd.Timestamp('2025-12-01')
-        df = df[df[date_col] >= season_start]
+        df = df[df[date_col] >= pd.Timestamp(config.SEASON_START)]
 
     # Filter to rows with actual taps > 0
     df = df[df['_ml'].str.len() > 0]
