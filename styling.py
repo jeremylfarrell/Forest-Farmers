@@ -430,6 +430,18 @@ def apply_custom_css():
         background-color: #654321 !important;
     }
 
+    /* Wrap table headers up to 3 lines so columns stay narrow */
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataEditor"] th,
+    .dvn-scroller th,
+    [data-testid="glideDataEditor"] .gdg-header-cell {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        max-height: 4.5em !important;
+        line-height: 1.4em !important;
+    }
+
     /* Prevent scroll bar from overlapping table data (especially right-side totals) */
     [data-testid="stDataFrame"] > div > div,
     [data-testid="stDataEditor"] > div > div,

@@ -306,14 +306,63 @@ def render(personnel_df=None, vacuum_df=None):
             remaining = max(total_2025 - total_net, 0)
             st.metric("Remaining to Match", f"{int(remaining):,}")
 
-        # Progress bar
-        st.progress(min(pct_overall / 100, 1.0))
+        # Sap drop progress visual
+        _pct_clamped = min(pct_overall, 100)
+        _fill_color = '#D4A017' if _pct_clamped < 100 else '#28a745'
+        _drop_html = f'''
+        <div style="display:flex; align-items:center; justify-content:center; margin:10px 0;">
+          <svg width="80" height="110" viewBox="0 0 80 110">
+            <defs>
+              <clipPath id="dropClip">
+                <path d="M40 5 C40 5 10 50 10 72 C10 92 23 105 40 105 C57 105 70 92 70 72 C70 50 40 5 40 5Z"/>
+              </clipPath>
+            </defs>
+            <path d="M40 5 C40 5 10 50 10 72 C10 92 23 105 40 105 C57 105 70 92 70 72 C70 50 40 5 40 5Z"
+                  fill="#e8e8e8" stroke="#8B4513" stroke-width="2"/>
+            <rect x="0" y="{105 - _pct_clamped}" width="80" height="{_pct_clamped}"
+                  fill="{_fill_color}" clip-path="url(#dropClip)" opacity="0.85"/>
+            <text x="40" y="75" text-anchor="middle" font-size="18" font-weight="bold"
+                  fill="#333">{pct_overall:.0f}%</text>
+          </svg>
+          <span style="margin-left:12px; font-size:16px; color:#555;">
+            <b>{int(total_net):,}</b> of <b>{int(total_2025):,}</b> taps
+          </span>
+        </div>
+        '''
+        st.markdown(_drop_html, unsafe_allow_html=True)
 
         st.divider()
 
-        # Conductor system comparison table
-        st.markdown("**By Conductor System** — sorted by % complete (lowest first = needs attention)")
-        display_cs = cs_agg[['Conductor System', 2025, '2026', '2026 Deleted', '2026 Capped',
+        # Horizontal bar chart FIRST — easy visual overview (per manager request)
+        chart_data = cs_agg[['Conductor System', '% of 2025']].copy()
+        chart_data = chart_data.sort_values('% of 2025', ascending=True)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=chart_data['% of 2025'],
+            y=chart_data['Conductor System'],
+            orientation='h',
+            marker=dict(
+                color=chart_data['% of 2025'],
+                colorscale=[[0, '#dc3545'], [0.5, '#ffc107'], [1.0, '#28a745']],
+                cmin=0, cmax=100,
+            ),
+            text=chart_data['% of 2025'].apply(lambda x: f"{x:.0f}%"),
+            textposition='outside',
+        ))
+        fig.add_vline(x=100, line_dash="dash", line_color="gray", annotation_text="2025 level")
+        fig.update_layout(
+            title='2026 Progress vs 2025 Baseline by Conductor System',
+            xaxis_title='% of 2025 Taps',
+            height=max(400, len(chart_data) * 28),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Conductor system comparison table — detailed numbers
+        st.markdown("**By Conductor System** — sorted alphabetically")
+        cs_agg_table = cs_agg.sort_values('Conductor System')
+        display_cs = cs_agg_table[['Conductor System', 2025, '2026', '2026 Deleted', '2026 Capped',
                              'Net 2026', 'Diff (26 vs 25)', '% of 2025', 'Remaining']].copy()
         display_cs = display_cs.rename(columns={
             2025: '2025',
@@ -340,32 +389,6 @@ def render(personnel_df=None, vacuum_df=None):
         st.dataframe(display_cs, column_config=_cs_col_cfg,
                      use_container_width=True, hide_index=True,
                      height=min(38 + len(display_cs) * 36, 500))
-
-        # Horizontal bar chart: % of 2025 by conductor system (uses Net 2026)
-        chart_data = cs_agg[['Conductor System', '% of 2025']].copy()
-        chart_data = chart_data.sort_values('% of 2025', ascending=True)
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=chart_data['% of 2025'],
-            y=chart_data['Conductor System'],
-            orientation='h',
-            marker=dict(
-                color=chart_data['% of 2025'],
-                colorscale=[[0, '#dc3545'], [0.5, '#ffc107'], [1.0, '#28a745']],
-                cmin=0, cmax=100,
-            ),
-            text=chart_data['% of 2025'].apply(lambda x: f"{x:.0f}%"),
-            textposition='outside',
-        ))
-        fig.add_vline(x=100, line_dash="dash", line_color="gray", annotation_text="2025 level")
-        fig.update_layout(
-            title='2026 Progress vs 2025 Baseline by Conductor System',
-            xaxis_title='% of 2025 Taps',
-            height=max(400, len(chart_data) * 28),
-            showlegend=False,
-        )
-        st.plotly_chart(fig, use_container_width=True)
 
     else:
         # No 2026 data — show historical overview
@@ -447,8 +470,12 @@ def render(personnel_df=None, vacuum_df=None):
             ml_display['2026 Deleted'] = ml_display['2026 Deleted'].fillna(0)
             ml_display['2026 Capped'] = ml_display['2026 Capped'].fillna(0)
             ml_display['Net 2026'] = ml_display['2026'].fillna(0) - ml_display['2026 Deleted']
-            ml_display['Diff (26 vs 25)'] = (
+            ml_display['Count Diff'] = (
                 ml_display['2026'].fillna(0)
+                - ml_display[2025].fillna(0)
+            ).astype(int)
+            ml_display['Actual Diff'] = (
+                ml_display['Net 2026']
                 - ml_display[2025].fillna(0)
             ).astype(int)
             ml_display['% of 2025'] = ((ml_display['Net 2026'] / ml_display[2025].fillna(0)) * 100).round(1)
@@ -475,7 +502,7 @@ def render(personnel_df=None, vacuum_df=None):
                         return "Large decrease" if t2025 < t2024 else "Large increase"
                 return ""
 
-        ml_display['Status'] = cs_data.apply(_flag_mainline, axis=1)
+        ml_display['Status'] = ml_display.apply(_flag_mainline, axis=1)
 
         # Add tappers column
         if has_2026:
@@ -496,7 +523,8 @@ def render(personnel_df=None, vacuum_df=None):
         # Reorder columns for clarity
         if has_2026:
             col_order = ['Mainline'] + [yr for yr in YEAR_COLS] + [
-                '2026', '2026 Deleted', '2026 Capped', 'Net 2026', 'Diff (26 vs 25)',
+                '2026', '2026 Deleted', '2026 Capped', 'Net 2026',
+                'Count Diff', 'Actual Diff',
                 '% of 2025', 'Tappers (2026)', 'Status'
             ]
             ml_display = ml_display[[c for c in col_order if c in ml_display.columns]]

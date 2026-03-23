@@ -251,31 +251,13 @@ def render(vacuum_df, personnel_df, repairs_df=None):
     ).fillna(0).astype(int)
 
     # Map controls
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        map_style = st.selectbox(
-            "Map Style",
-            ["Street", "Terrain", "Satellite"],  # Street first as default (faster)
-            help="Choose map background"
-        )
-
-    with col2:
-        if vacuum_col:
-            color_options = ["Releaser Differential"]
-            if has_site:
-                color_options.append("Site")
-            color_options.append("Freeze Alert")
-            color_by = st.selectbox(
-                "Color Markers By",
-                color_options,
-                help="How to color the sensor markers"
-            )
-        else:
-            color_by = "Site" if has_site else None
-
-    with col3:
-        st.caption("Dot size reflects tap count")
+    map_style = st.selectbox(
+        "Map Style",
+        ["Street", "Terrain", "Satellite"],
+        help="Choose map background"
+    )
+    # Always color by Releaser Differential (per manager request)
+    color_by = "Releaser Differential" if vacuum_col else None
 
     # Pre-compute freeze data for Freeze Alert mode and popups
     from utils.weather_api import get_temperature_data
@@ -430,35 +412,6 @@ def render(vacuum_df, personnel_df, repairs_df=None):
         </div>
         '''
         m.get_root().html.add_child(folium.Element(legend_html))
-    elif has_site and color_by == "Site":
-        legend_html = '''
-        <div style="position: fixed;
-                    top: 10px; right: 10px; width: 150px; height: auto;
-                    background-color: white; border:2px solid grey; z-index:9999;
-                    font-size:14px; padding: 10px; border-radius: 5px;">
-        <p style="margin: 0; font-weight: bold; text-align: center;">Site Legend</p>
-        <p style="margin: 5px 0;"><span style="color: #2196F3; font-size: 20px;">●</span> NY</p>
-        <p style="margin: 5px 0;"><span style="color: #4CAF50; font-size: 20px;">●</span> VT</p>
-        <p style="margin: 5px 0;"><span style="color: #9E9E9E; font-size: 20px;">●</span> UNK</p>
-        <p style="margin: 5px 0;"><span style="color: #FFFFFF; font-size: 20px; -webkit-text-stroke: 2px #333;">●</span> Not Communicating</p>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
-    elif color_by == "Freeze Alert":
-        legend_html = '''
-        <div style="position: fixed;
-                    top: 10px; right: 10px; width: 180px; height: auto;
-                    background-color: white; border:2px solid grey; z-index:9999;
-                    font-size:14px; padding: 10px; border-radius: 5px;">
-        <p style="margin: 0; font-weight: bold; text-align: center;">Freeze Alert</p>
-        <p style="margin: 5px 0;"><span style="color: #e74c3c; font-size: 20px;">&#9679;</span> Likely Leak</p>
-        <p style="margin: 5px 0;"><span style="color: #f39c12; font-size: 20px;">&#9679;</span> Watch</p>
-        <p style="margin: 5px 0;"><span style="color: #27ae60; font-size: 20px;">&#9679;</span> OK</p>
-        <p style="margin: 5px 0;"><span style="color: #bdc3c7; font-size: 20px;">&#9679;</span> No Data</p>
-        <p style="margin: 5px 0;"><span style="color: #FFFFFF; font-size: 20px; -webkit-text-stroke: 2px #333;">&#9679;</span> Not Communicating</p>
-        </div>
-        '''
-        m.get_root().html.add_child(folium.Element(legend_html))
 
     # Calculate max taps for dot scaling
     max_taps_value = map_data['Taps'].max() if map_data['Taps'].max() > 0 else 1
@@ -495,33 +448,6 @@ def render(vacuum_df, personnel_df, repairs_df=None):
             else:
                 color = 'gray'
                 status = "No reading"
-        elif color_by == "Site" and has_site and 'Site' in row:
-            site = row['Site']
-            if site == 'NY':
-                color = 'blue'
-                status = "🟦 NY Site"
-            elif site == 'VT':
-                color = 'green'
-                status = "🟩 VT Site"
-            else:
-                color = 'gray'
-                status = "⚫ Unknown Site"
-        elif color_by == "Freeze Alert":
-            freeze_info = _freeze_lookup.get(row['Sensor'])
-            if freeze_info:
-                fz_status = freeze_info['status']
-                if fz_status == 'LIKELY LEAK':
-                    color = 'red'
-                    status = f"🔴 Likely Leak ({freeze_info['drop_rate']:.0%})"
-                elif fz_status == 'WATCH':
-                    color = 'orange'
-                    status = f"🟠 Watch ({freeze_info['drop_rate']:.0%})"
-                else:
-                    color = 'green'
-                    status = "🟢 OK — Stable during freeze"
-            else:
-                color = 'gray'
-                status = "No freeze data"
         else:
             color = 'blue'
             status = "Sensor"
@@ -691,12 +617,13 @@ def render(vacuum_df, personnel_df, repairs_df=None):
             st.metric("Avg Vacuum", f"{avg_vacuum:.1f}\"")
 
     with col3:
-        lat_range = map_data['Latitude'].max() - map_data['Latitude'].min()
-        st.metric("Latitude Range", f"{lat_range:.4f}°")
+        if '_releaser_diff' in map_data.columns:
+            avg_rel_diff = map_data['_releaser_diff'].dropna().mean()
+            st.metric("Avg Releaser Diff", f"{avg_rel_diff:.1f}\"")
 
     with col4:
-        lon_range = map_data['Longitude'].max() - map_data['Longitude'].min()
-        st.metric("Longitude Range", f"{lon_range:.4f}°")
+        stale_count = map_data['_is_stale'].sum() if '_is_stale' in map_data.columns else 0
+        st.metric("Not Communicating", int(stale_count))
 
     # Site-specific stats if viewing all
     if has_site and not viewing_site:
