@@ -442,6 +442,14 @@ def apply_custom_css():
         line-height: 1.4em !important;
     }
 
+    /* Center all table cell values so data is visible even near scrollbar */
+    [data-testid="stDataFrame"] td,
+    [data-testid="stDataEditor"] td,
+    .dvn-scroller td,
+    [data-testid="glideDataEditor"] .gdg-cell {
+        text-align: center !important;
+    }
+
     /* Prevent scroll bar from overlapping table data (especially right-side totals) */
     [data-testid="stDataFrame"] > div > div,
     [data-testid="stDataEditor"] > div > div,

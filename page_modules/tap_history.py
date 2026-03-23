@@ -54,7 +54,7 @@ def _classify_status(t2025, t2026):
 def _color_status(val):
     """Return CSS styling for a status cell (used with pandas Styler.map)."""
     color_map = {
-        'Not started': 'background-color: #1a1a1a; color: white',
+        'No 2026 data': 'background-color: #1a1a1a; color: white',
         'Significantly less': 'background-color: #dc3545; color: white',
         'On track': 'background-color: #ffc107; color: black',
         'On target': 'background-color: #28a745; color: white',
@@ -219,6 +219,61 @@ def get_2026_tappers(personnel_df):
         lambda names: ', '.join(sorted(names.unique()))
     )
     return tappers_by_ml
+
+
+# ── Save helpers ───────────────────────────────────────────────────────
+
+def _save_mainline_corrections(changed_rows, unknown_df, personnel_df,
+                                mainline_col, emp_col, date_col, job_col):
+    """Write corrected mainline names back to approved_personnel via data_loader."""
+    from data_loader import save_approved_personnel
+    from datetime import datetime as dt
+
+    try:
+        sheet_url = st.secrets['sheets']['PERSONNEL_SHEET_URL']
+        creds = dict(st.secrets['gcp_service_account'])
+    except (KeyError, FileNotFoundError):
+        st.error("Missing Google Sheets credentials in secrets.")
+        return
+
+    # Build approved rows with corrected mainline
+    corrections = []
+    for idx, row in changed_rows.iterrows():
+        new_mainline = row['Mainline']
+        emp = row.get('Employee', '')
+        date_str = row.get('Date', '')
+
+        # Find the original personnel row to get all columns
+        match_mask = pd.Series([True] * len(personnel_df))
+        if emp_col and emp:
+            match_mask &= personnel_df[emp_col].astype(str).str.strip() == emp.strip()
+        if date_col and date_str:
+            p_dates = pd.to_datetime(personnel_df[date_col], errors='coerce').dt.strftime('%Y-%m-%d')
+            match_mask &= p_dates == date_str
+
+        matched = personnel_df[match_mask]
+        if matched.empty:
+            continue
+
+        for _, orig_row in matched.iterrows():
+            correction = orig_row.to_dict()
+            correction[mainline_col] = new_mainline
+            correction['Approved Date'] = dt.now().strftime('%Y-%m-%d %H:%M')
+            correction['Approved By'] = 'Dashboard (Mainline Fix)'
+            corrections.append(correction)
+
+    if corrections:
+        approved_df = pd.DataFrame(corrections)
+        success, msg = save_approved_personnel(sheet_url, creds, approved_df)
+        if success:
+            st.success(f"✅ Saved {len(corrections)} mainline correction(s). Refresh Personnel to see changes.")
+            # Clear caches so next load picks up corrections
+            from data_loader import load_approved_personnel
+            load_approved_personnel.clear()
+        else:
+            st.error(f"Save failed: {msg}")
+    else:
+        st.warning("No matching personnel rows found for corrections.")
 
 
 # ── Main render ────────────────────────────────────────────────────────
@@ -593,7 +648,7 @@ def render(personnel_df=None, vacuum_df=None):
 
             # Sort by status priority (worst first), then by Remaining descending
             status_order = {
-                'Not started': 0,
+                'No 2026 data': 0,
                 'Significantly less': 1,
                 'On track': 2,
                 'On target': 3,
@@ -620,8 +675,8 @@ def render(personnel_df=None, vacuum_df=None):
             # Summary metrics by status
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
-                not_started = len(att_df[att_df['Status'] == 'Not started'])
-                st.metric("Not Started", not_started)
+                not_started = len(att_df[att_df['Status'] == 'No 2026 data'])
+                st.metric("No 2026 Data", not_started)
             with col2:
                 sig_less = len(att_df[att_df['Status'] == 'Significantly less'])
                 st.metric("Sig. Less", sig_less)
@@ -826,7 +881,8 @@ def render(personnel_df=None, vacuum_df=None):
                         st.markdown(
                             "*Mainline name is filled in but doesn't match any row in "
                             "`vt_taps_historical.xlsx`. Common causes: spelling difference, "
-                            "extra space, or a brand-new mainline not yet in the Excel file.*"
+                            "extra space, or a brand-new mainline not yet in the Excel file. "
+                            "**Edit the Mainline column to fix, then click Save.***"
                         )
                         disp_unk = _make_untrk_display(unknown_df)
                         # Show unique unrecognised names as a quick reference
@@ -842,11 +898,37 @@ def render(personnel_df=None, vacuum_df=None):
                                 bad_names, use_container_width=True, hide_index=True,
                                 height=min(38 + len(bad_names) * 36, 250),
                             )
-                        st.markdown("**All entries:**")
-                        st.dataframe(
-                            disp_unk, use_container_width=True, hide_index=True,
+                        st.markdown("**All entries** *(edit Mainline to correct)*:")
+                        # Keep original mainline for change detection
+                        disp_unk['_Original Mainline'] = disp_unk['Mainline'].copy()
+                        edited_unk = st.data_editor(
+                            disp_unk,
+                            use_container_width=True, hide_index=True,
                             height=min(38 + len(disp_unk) * 36, 500),
+                            key="untracked_editor",
+                            column_config={
+                                'Mainline': st.column_config.TextColumn('Mainline', help='Edit to correct the mainline name'),
+                                'Employee': st.column_config.TextColumn('Employee', disabled=True),
+                                'Date': st.column_config.TextColumn('Date', disabled=True),
+                                'Taps Put In': st.column_config.NumberColumn('Taps Put In', disabled=True),
+                                'Job': st.column_config.TextColumn('Job', disabled=True),
+                                'Notes': st.column_config.TextColumn('Notes', disabled=True),
+                                '_Original Mainline': None,  # Hidden
+                            },
+                            column_order=['Employee', 'Date', 'Taps Put In', 'Mainline', 'Job', 'Notes'],
                         )
+
+                        # Save button — write corrected mainlines to approved_personnel
+                        changed_rows = edited_unk[
+                            edited_unk['Mainline'] != edited_unk['_Original Mainline']
+                        ]
+                        if not changed_rows.empty:
+                            st.info(f"📝 {len(changed_rows)} mainline correction(s) pending.")
+                            if st.button("💾 Save Mainline Corrections", key="save_untracked_fixes"):
+                                _save_mainline_corrections(
+                                    changed_rows, unknown_df, personnel_df,
+                                    mainline_col_u, emp_col_u, date_col_u, job_col_u
+                                )
             else:
                 st.success(
                     "✅ All tapped entries are matched to a known mainline — "
@@ -873,6 +955,8 @@ def render(personnel_df=None, vacuum_df=None):
             emp_col_d = find_column(personnel_df, 'Employee Name', 'employee', 'EE First')
             job_col_d = find_column(personnel_df, 'Job', 'job', 'Job Code')
 
+            clock_in_col_d = find_column(personnel_df, 'Clock In', 'clock_in', 'clock in')
+
             if all([mainline_col_d, taps_col_d, date_col_d, emp_col_d]):
                 dup_df = personnel_df.copy()
                 dup_df[date_col_d] = pd.to_datetime(dup_df[date_col_d], errors='coerce')
@@ -893,71 +977,96 @@ def render(personnel_df=None, vacuum_df=None):
                 else:
                     # Merge back to get full rows
                     dup_rows = dup_df.merge(dup_keys[key_cols], on=key_cols, how='inner')
-                    # Build display table
+
+                    # Build display columns — include Clock In for timestamp disambiguation
                     _dup_col_map = {}
                     for _c, _lbl in [
                         (emp_col_d,      'Employee'),
                         (date_col_d,     'Date'),
+                        (clock_in_col_d, 'Clock In'),
                         (mainline_col_d, 'Mainline'),
                         (taps_col_d,     'Taps Put In'),
                         (job_col_d,      'Job'),
                     ]:
                         if _c and _c in dup_rows.columns:
                             _dup_col_map[_c] = _lbl
+
                     disp_dup = dup_rows[[c for c in _dup_col_map]].rename(columns=_dup_col_map)
                     if 'Date' in disp_dup.columns:
                         disp_dup['Date'] = pd.to_datetime(disp_dup['Date'], errors='coerce').dt.strftime('%Y-%m-%d')
+                    if 'Clock In' in disp_dup.columns:
+                        disp_dup['Clock In'] = pd.to_datetime(disp_dup['Clock In'], errors='coerce').dt.strftime('%H:%M')
                     if 'Taps Put In' in disp_dup.columns:
                         disp_dup['Taps Put In'] = pd.to_numeric(disp_dup['Taps Put In'], errors='coerce').fillna(0).astype(int)
                     disp_dup = disp_dup.sort_values([c for c in ['Employee', 'Date', 'Mainline'] if c in disp_dup.columns])
+                    disp_dup = disp_dup.reset_index(drop=True)
+
+                    # Add editable columns for manager actions
+                    disp_dup['Is Duplicate'] = False
+                    disp_dup['_Original Mainline'] = disp_dup['Mainline'].copy()
 
                     st.warning(
                         f"⚠️ Found **{len(dup_keys)} unique Employee/Date/Mainline combinations** with duplicate entries "
-                        f"({len(dup_rows)} total rows). Correct in TSheets or Manager Data Review."
+                        f"({len(dup_rows)} total rows). Use **Clock In** time to tell real duplicates from split shifts."
                     )
-                    st.dataframe(disp_dup.reset_index(drop=True), use_container_width=True, hide_index=True,
-                                 height=min(38 + len(disp_dup) * 36, 500))
+                    st.markdown(
+                        "*✅ Check **Is Duplicate** to mark true duplicates. "
+                        "Edit **Mainline** to fix wrong entries. Then click **Save**.*"
+                    )
+
+                    col_order = ['Is Duplicate', 'Employee', 'Date', 'Clock In', 'Mainline', 'Taps Put In', 'Job']
+                    col_order = [c for c in col_order if c in disp_dup.columns]
+
+                    edited_dup = st.data_editor(
+                        disp_dup,
+                        use_container_width=True, hide_index=True,
+                        height=min(38 + len(disp_dup) * 36, 500),
+                        key="dup_editor",
+                        column_config={
+                            'Is Duplicate': st.column_config.CheckboxColumn('Is Duplicate', help='Check if this is a true duplicate to remove'),
+                            'Mainline': st.column_config.TextColumn('Mainline', help='Edit to correct the mainline name'),
+                            'Employee': st.column_config.TextColumn('Employee', disabled=True),
+                            'Date': st.column_config.TextColumn('Date', disabled=True),
+                            'Clock In': st.column_config.TextColumn('Clock In', disabled=True),
+                            'Taps Put In': st.column_config.NumberColumn('Taps Put In', disabled=True),
+                            'Job': st.column_config.TextColumn('Job', disabled=True),
+                            '_Original Mainline': None,  # Hidden
+                        },
+                        column_order=col_order,
+                    )
+
+                    # Detect changes
+                    marked_dups = edited_dup[edited_dup['Is Duplicate'] == True]
+                    fixed_ml = edited_dup[edited_dup['Mainline'] != edited_dup['_Original Mainline']]
+                    has_changes = not marked_dups.empty or not fixed_ml.empty
+
+                    if has_changes:
+                        parts = []
+                        if not marked_dups.empty:
+                            parts.append(f"{len(marked_dups)} marked as duplicate")
+                        if not fixed_ml.empty:
+                            parts.append(f"{len(fixed_ml)} mainline correction(s)")
+                        st.info(f"📝 {', '.join(parts)} pending.")
+
+                        if st.button("💾 Save Duplicate Corrections", key="save_dup_fixes"):
+                            # Save mainline corrections via approved_personnel
+                            if not fixed_ml.empty:
+                                _save_mainline_corrections(
+                                    fixed_ml, dup_rows, personnel_df,
+                                    mainline_col_d, emp_col_d, date_col_d, job_col_d
+                                )
+                            if not marked_dups.empty:
+                                # For true duplicates, save with Taps Put In = 0 to zero them out
+                                zeroed = marked_dups.copy()
+                                zeroed['Taps Put In'] = 0
+                                _save_mainline_corrections(
+                                    zeroed, dup_rows, personnel_df,
+                                    mainline_col_d, emp_col_d, date_col_d, job_col_d
+                                )
             else:
                 st.info("Could not find required columns for duplicate detection.")
 
     st.divider()
-
-    # ==================================================================
-    # SECTION 5: Full Historical View (now includes 2026 + % of 2026)
-    # ==================================================================
-    if has_2026:
-        with st.expander("📊 Full Historical Data (2021-2026)"):
-            agg_cols = YEAR_COLS + ['2026']
-            full_cs = hist_df.groupby('Conductor System')[agg_cols].sum().reset_index()
-            full_cs['Change (25-26)'] = full_cs['2026'] - full_cs[2025]
-            full_cs = full_cs.sort_values('Conductor System')
-
-            for yr in YEAR_COLS:
-                full_cs[yr] = full_cs[yr].fillna(0).astype(int)
-            full_cs['2026'] = full_cs['2026'].fillna(0).astype(int)
-            full_cs['Change (25-26)'] = full_cs['Change (25-26)'].fillna(0).astype(int)
-
-            # Build display with "% of 2026" interleaved after each historical year
-            display_data = full_cs[['Conductor System']].copy()
-            for yr in YEAR_COLS:
-                display_data[str(yr)] = full_cs[yr]
-                pct_col = f'% 2026'
-                pct_vals = ((full_cs[yr] / full_cs['2026']) * 100).round(0)
-                pct_vals = pct_vals.replace([float('inf'), float('-inf')], 0).fillna(0)
-                display_data[f'{yr} % of 2026'] = pct_vals.astype(int).astype(str) + '%'
-            display_data['2026'] = full_cs['2026']
-            display_data['Change (25-26)'] = full_cs['Change (25-26)']
-
-            st.dataframe(display_data, use_container_width=True, hide_index=True)
-    else:
-        with st.expander("📊 Full Historical Data (2021-2025)"):
-            full_cs = hist_df.groupby('Conductor System')[YEAR_COLS].sum().reset_index()
-            full_cs['Change (24-25)'] = full_cs[2025] - full_cs[2024]
-            full_cs = full_cs.sort_values(2025, ascending=False)
-            for yr in YEAR_COLS:
-                full_cs[yr] = full_cs[yr].fillna(0).astype(int)
-            full_cs['Change (24-25)'] = full_cs['Change (24-25)'].fillna(0).astype(int)
-            st.dataframe(full_cs, use_container_width=True, hide_index=True)
 
     # ==================================================================
     # SECTION 5: Notes
