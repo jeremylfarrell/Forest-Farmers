@@ -146,7 +146,8 @@ FREEZE_DROP_RATE_WATCH = 0.25      # Drop rate > 25% = "WATCH"
 #   abs(diff) 5-10  → Critical (pink)
 #   abs(diff) ≥ 10  → FROZEN (dark red)
 #   positive > 1    → False Positive (sensor error) — clamped to 1 for display
-#   vacuum ≈ 0 AND abs(diff) ≤ 1 → Pump OFF
+#   abs(vacuum) ≤ 1 AND abs(diff) ≤ 1 → Pump OFF
+#   abs(vacuum) ≤ 1 AND diff < -10    → FROZEN (ice blockage)
 RELEASER_DIFF_THRESHOLDS = [
     (2.0,  '#228B22', 'Good'),         # abs 0-2"  — green
     (5.0,  '#DAA520', 'Low Priority'), # abs 2-5"  — amber
@@ -289,14 +290,14 @@ def get_releaser_diff_color(vacuum, releaser_diff):
       - More negative = worse (bigger vacuum loss in the line)
       - Positive > 1 = sensor error / false reading
 
-    Rules (from manager meeting 2025-03-17):
-    - vacuum ≈ 0 AND abs(diff) ≤ 1 → gray (pump OFF)
-    - vacuum ≈ 0 AND abs(diff) > 1  → dark red (FROZEN — pump on but line frozen)
-    - positive diff > 1              → steel blue (False Positive — sensor error)
-    - abs(diff) < 2                  → green (Good)
-    - abs(diff) 2–5                  → amber (Low Priority)
-    - abs(diff) 5–10                 → pink (Critical)
-    - abs(diff) ≥ 10                 → dark red (FROZEN)
+    Rules (from manager meeting 2025-03-18):
+    - vacuum within 1 of zero AND diff ≤ 1  → gray (pump OFF)
+    - vacuum within 1 of zero AND diff < -10 → dark red (FROZEN — ice blockage)
+    - positive diff > 1                      → steel blue (False Positive)
+    - abs(diff) < 2                          → green (Good)
+    - abs(diff) 2–5                          → amber (Low Priority)
+    - abs(diff) 5–10                         → pink (Critical)
+    - abs(diff) ≥ 10                         → dark red (FROZEN)
     """
     import math
     if vacuum is None or releaser_diff is None:
@@ -305,12 +306,18 @@ def get_releaser_diff_color(vacuum, releaser_diff):
        (isinstance(releaser_diff, float) and math.isnan(releaser_diff)):
         return (RELEASER_OFF_COLOR, 'No Data')
 
-    # Pump off: vacuum ≈ 0 AND releaser diff ≈ 0
-    if vacuum <= 0.01 and abs(releaser_diff) <= 1.0:
+    # Pump off: vacuum within 1 of zero AND releaser diff small
+    if abs(vacuum) <= 1.0 and abs(releaser_diff) <= 1.0:
         return (RELEASER_OFF_COLOR, 'OFF')
 
-    # Vacuum is zero but releaser diff is significant → line is frozen
-    if vacuum <= 0.01 and abs(releaser_diff) > 1.0:
+    # FROZEN: vacuum within 1 of zero AND releaser diff < -10
+    # (ice builds up at leak → air stops → vacuum drops to ~0,
+    #  but releaser still has vacuum so diff goes very negative)
+    if abs(vacuum) <= 1.0 and releaser_diff < -10.0:
+        return (RELEASER_FROZEN_COLOR, 'FROZEN')
+
+    # Vacuum near zero but diff between -10 and -1 → likely frozen but less severe
+    if abs(vacuum) <= 1.0 and abs(releaser_diff) > 1.0:
         return (RELEASER_FROZEN_COLOR, 'FROZEN')
 
     # Positive diff > 1 = sensor error / false reading
