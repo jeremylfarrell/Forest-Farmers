@@ -210,27 +210,44 @@ def render(vacuum_df, personnel_df):
 
     st.divider()
 
-    # ── Per-conductor system reports ────────────────────────────────
+    # ── Filters: Status + Conductor System ────────────────────────
     conductors = sorted(latest['Conductor'].unique())
 
     if not conductors:
         st.info("No conductor systems found.")
         return
 
-    # Build selector with sugarbush grouping
-    conductor_options = ["Overview (All)"]
-    for bush_name, bush_conds in config.SUGARBUSH_MAP.items():
-        matching = [c for c in conductors if c in bush_conds]
-        if matching:
-            for c in sorted(matching):
-                conductor_options.append(f"{bush_name} — {c}")
-    # Conductors not in the sugarbush map are likely typos or excluded sensors — omit them
+    filter_col1, filter_col2 = st.columns([1, 2])
 
-    selected = st.selectbox(
-        "Conductor System",
-        conductor_options,
-        key="freeze_report_conductor_select"
-    )
+    with filter_col1:
+        # Status filter — click-through from the summary metrics
+        all_statuses = sorted(latest['Freeze_Status'].unique())
+        status_filter = st.selectbox(
+            "Filter by Status",
+            ["All Statuses"] + all_statuses,
+            key="freeze_report_status_filter"
+        )
+
+    with filter_col2:
+        # Build selector with sugarbush grouping
+        conductor_options = ["Overview (All)"]
+        for bush_name, bush_conds in config.SUGARBUSH_MAP.items():
+            matching = [c for c in conductors if c in bush_conds]
+            if matching:
+                for c in sorted(matching):
+                    conductor_options.append(f"{bush_name} — {c}")
+        # Conductors not in the sugarbush map are likely typos or excluded sensors — omit them
+
+        selected = st.selectbox(
+            "Conductor System",
+            conductor_options,
+            key="freeze_report_conductor_select"
+        )
+
+    # Apply status filter to the data used for all downstream views
+    if status_filter != "All Statuses":
+        latest = latest[latest['Freeze_Status'] == status_filter].copy()
+        st.caption(f"Showing {len(latest)} sensor(s) with status: **{status_filter}**")
 
     if selected == "Overview (All)":
         _render_overview(latest, conductors, sensor_col, vacuum_col, releaser_col, timestamp_col, vdf)
