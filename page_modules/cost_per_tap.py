@@ -166,6 +166,9 @@ def _aggregate_by_mainline(df, rel_diff_by_sensor, vacuum_df):
 
         conductor = extract_conductor_system(mainline)
 
+        fixing_cost_per_tap = fixing_cost / total_taps if total_taps > 0 else 0
+        leak_cost_per_tap = leak_cost / total_taps if total_taps > 0 else 0
+
         rows.append({
             'Mainline': mainline,
             'Conductor': conductor,
@@ -176,8 +179,10 @@ def _aggregate_by_mainline(df, rel_diff_by_sensor, vacuum_df):
             'Cost/Tap (Tapping)': round(cost_per_tap, 2),
             'Fixing Hours': round(fixing_hours, 1),
             'Fixing Cost': round(fixing_cost, 2),
+            'Fixing Cost/Tap': round(fixing_cost_per_tap, 2),
             'Leak Check Hours': round(leak_hours, 1),
             'Leak Check Cost': round(leak_cost, 2),
+            'Leak Check Cost/Tap': round(leak_cost_per_tap, 2),
             'Total Cost': round(total_cost, 2),
             'All-In Cost/Tap': round(all_in_cost_per_tap, 2),
             'Avg Rel Diff (>32F)': avg_rel_diff,
@@ -207,6 +212,10 @@ def _aggregate_by_employee(df):
         leak_hours = leak['_hours'].sum()
 
         cost_per_tap = tapping_cost / total_taps if total_taps > 0 else 0
+        fixing_cost_per_tap = fixing_cost / total_taps if total_taps > 0 else 0
+        leak_cost_per_tap = leak_cost / total_taps if total_taps > 0 else 0
+        total_cost = tapping_cost + fixing_cost + leak_cost
+        all_in_cost_per_tap = total_cost / total_taps if total_taps > 0 else 0
 
         mainlines_tapped = sorted(tapping['_mainline'].unique().tolist())
 
@@ -219,8 +228,11 @@ def _aggregate_by_employee(df):
             'Cost/Tap (Tapping)': round(cost_per_tap, 2),
             'Fixing Hours': round(fixing_hours, 1),
             'Fixing Cost': round(fixing_cost, 2),
+            'Fixing Cost/Tap': round(fixing_cost_per_tap, 2),
             'Leak Check Hours': round(leak_hours, 1),
             'Leak Check Cost': round(leak_cost, 2),
+            'Leak Check Cost/Tap': round(leak_cost_per_tap, 2),
+            'All-In Cost/Tap': round(all_in_cost_per_tap, 2),
         })
 
     result = pd.DataFrame(rows)
@@ -261,6 +273,9 @@ def _aggregate_by_employee_mainline(df, rel_diff_by_sensor, vacuum_df):
             if matched_sensor and matched_sensor in rel_diff_by_sensor:
                 avg_rel_diff = rel_diff_by_sensor[matched_sensor]
 
+        fixing_cost_per_tap = fixing_cost / total_taps if total_taps > 0 else 0
+        leak_cost_per_tap = leak_cost / total_taps if total_taps > 0 else 0
+
         rows.append({
             'Employee': employee,
             'Mainline': mainline,
@@ -270,8 +285,10 @@ def _aggregate_by_employee_mainline(df, rel_diff_by_sensor, vacuum_df):
             'Cost/Tap (Tapping)': round(cost_per_tap, 2),
             'Fixing Hours': round(fixing_hours, 1),
             'Fixing Cost': round(fixing_cost, 2),
+            'Fixing Cost/Tap': round(fixing_cost_per_tap, 2),
             'Leak Check Hours': round(leak_hours, 1),
             'Leak Check Cost': round(leak_cost, 2),
+            'Leak Check Cost/Tap': round(leak_cost_per_tap, 2),
             'Total Cost': round(total_cost, 2),
             'All-In Cost/Tap': round(all_in_cost_per_tap, 2),
             'Avg Rel Diff (>32F)': avg_rel_diff,
@@ -327,8 +344,8 @@ def _render_mainline_view(stats):
 
     # Format for display
     fmt = display.copy()
-    money_cols = ['Tapping Cost', 'Cost/Tap (Tapping)', 'Fixing Cost', 'Leak Check Cost',
-                  'Total Cost', 'All-In Cost/Tap']
+    money_cols = ['Tapping Cost', 'Cost/Tap (Tapping)', 'Fixing Cost', 'Fixing Cost/Tap',
+                  'Leak Check Cost', 'Leak Check Cost/Tap', 'Total Cost', 'All-In Cost/Tap']
     for c in money_cols:
         if c in fmt.columns:
             fmt[c] = fmt[c].apply(lambda x: f"${x:,.2f}" if x > 0 else "")
@@ -338,10 +355,9 @@ def _render_mainline_view(stats):
             lambda x: f"{x:.1f}\"" if pd.notna(x) else ""
         )
 
-    # Visible columns — Conductor, Tapping Hours, Tapping Cost, Total Cost hidden
-    # but kept in underlying data for filtering/sorting
+    # Visible columns: mainline, tapped by, taps, then 4 cost/tap columns + rel diff
     visible_cols = ['Mainline', 'Tapped By', 'Taps', 'Cost/Tap (Tapping)',
-                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost',
+                    'Fixing Cost/Tap', 'Leak Check Cost/Tap',
                     'All-In Cost/Tap', 'Avg Rel Diff (>32F)']
     visible_cols = [c for c in visible_cols if c in fmt.columns]
 
@@ -349,11 +365,9 @@ def _render_mainline_view(stats):
         'Mainline': st.column_config.TextColumn('Mainline'),
         'Tapped By': st.column_config.TextColumn('Tapped\nBy'),
         'Taps': st.column_config.NumberColumn('Taps', width='small'),
-        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
-        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
-        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
-        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
-        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Tapping\nCost/Tap', width='small'),
+        'Fixing Cost/Tap': st.column_config.TextColumn('Fixing\nCost/Tap', width='small'),
+        'Leak Check Cost/Tap': st.column_config.TextColumn('Leak Check\nCost/Tap', width='small'),
         'All-In Cost/Tap': st.column_config.TextColumn('All-In\nCost/Tap', width='small'),
         'Avg Rel Diff (>32F)': st.column_config.TextColumn('Avg Rel Diff\n(>32°F)', width='small'),
     }
@@ -430,24 +444,24 @@ def _render_employee_view(stats):
         return
 
     fmt = tappers.copy()
-    money_cols = ['Tapping Cost', 'Cost/Tap (Tapping)', 'Fixing Cost', 'Leak Check Cost']
+    money_cols = ['Tapping Cost', 'Cost/Tap (Tapping)', 'Fixing Cost', 'Fixing Cost/Tap',
+                  'Leak Check Cost', 'Leak Check Cost/Tap', 'All-In Cost/Tap']
     for c in money_cols:
         if c in fmt.columns:
             fmt[c] = fmt[c].apply(lambda x: f"${x:,.2f}" if x > 0 else "")
 
     visible_cols = ['Employee', 'Mainlines Tapped', 'Taps', 'Cost/Tap (Tapping)',
-                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost']
+                    'Fixing Cost/Tap', 'Leak Check Cost/Tap', 'All-In Cost/Tap']
     visible_cols = [c for c in visible_cols if c in fmt.columns]
 
     emp_col_config = {
         'Employee': st.column_config.TextColumn('Employee'),
         'Mainlines Tapped': st.column_config.NumberColumn('Mainlines\nTapped', width='small'),
         'Taps': st.column_config.NumberColumn('Taps', width='small'),
-        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
-        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
-        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
-        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
-        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Tapping\nCost/Tap', width='small'),
+        'Fixing Cost/Tap': st.column_config.TextColumn('Fixing\nCost/Tap', width='small'),
+        'Leak Check Cost/Tap': st.column_config.TextColumn('Leak Check\nCost/Tap', width='small'),
+        'All-In Cost/Tap': st.column_config.TextColumn('All-In\nCost/Tap', width='small'),
     }
 
     st.dataframe(fmt, column_config=emp_col_config, column_order=visible_cols,
@@ -511,7 +525,7 @@ def _render_combo_view(stats):
         )
 
     visible_cols = ['Employee', 'Mainline', 'Taps', 'Cost/Tap (Tapping)',
-                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost',
+                    'Fixing Cost/Tap', 'Leak Check Cost/Tap',
                     'All-In Cost/Tap', 'Avg Rel Diff (>32F)']
     visible_cols = [c for c in visible_cols if c in fmt.columns]
 
@@ -519,11 +533,9 @@ def _render_combo_view(stats):
         'Employee': st.column_config.TextColumn('Employee'),
         'Mainline': st.column_config.TextColumn('Mainline'),
         'Taps': st.column_config.NumberColumn('Taps', width='small'),
-        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
-        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
-        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
-        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
-        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Tapping\nCost/Tap', width='small'),
+        'Fixing Cost/Tap': st.column_config.TextColumn('Fixing\nCost/Tap', width='small'),
+        'Leak Check Cost/Tap': st.column_config.TextColumn('Leak Check\nCost/Tap', width='small'),
         'All-In Cost/Tap': st.column_config.TextColumn('All-In\nCost/Tap', width='small'),
         'Avg Rel Diff (>32F)': st.column_config.TextColumn('Avg Rel Diff\n(>32°F)', width='small'),
     }
