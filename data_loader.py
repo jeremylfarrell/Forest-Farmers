@@ -445,6 +445,55 @@ def save_repairs_updates(sheet_url, credentials_file, updated_df):
         return False, f"Error saving: {e}"
 
 
+def delete_repairs(sheet_url, credentials_file, repair_ids):
+    """
+    Delete repair rows from the 'repairs_tracker' tab by Repair ID.
+    Deletes rows from bottom to top to avoid row-shift issues.
+    """
+    try:
+        client = connect_to_sheets(credentials_file)
+        sheet = client.open_by_url(sheet_url)
+
+        tracker_ws = None
+        for ws in sheet.worksheets():
+            if ws.title.strip().lower() == 'repairs_tracker':
+                tracker_ws = ws
+                break
+
+        if tracker_ws is None:
+            return False, "repairs_tracker tab not found"
+
+        raw = tracker_ws.get_all_values()
+        if not raw:
+            return False, "No data in repairs_tracker tab"
+
+        headers = raw[0]
+        repair_id_col = headers.index('Repair ID') if 'Repair ID' in headers else None
+        if repair_id_col is None:
+            return False, "Repair ID column not found"
+
+        # Find row numbers to delete (1-indexed)
+        ids_to_delete = set(str(rid) for rid in repair_ids)
+        rows_to_delete = []
+        for i, row in enumerate(raw[1:], start=2):
+            if repair_id_col < len(row) and row[repair_id_col] in ids_to_delete:
+                rows_to_delete.append(i)
+
+        if not rows_to_delete:
+            return False, "No matching repairs found to delete"
+
+        # Delete from bottom to top so row indices don't shift
+        for row_num in sorted(rows_to_delete, reverse=True):
+            tracker_ws.delete_rows(row_num)
+
+        load_repairs_tracker.clear()
+
+        return True, f"Deleted {len(rows_to_delete)} repair(s)"
+
+    except Exception as e:
+        return False, f"Error deleting: {e}"
+
+
 def save_repair_locations(sheet_url, credentials_file, locations_df):
     """
     Write GPS Location strings back to the repairs_tracker tab for repairs

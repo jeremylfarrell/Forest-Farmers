@@ -12,7 +12,7 @@ import plotly.express as px
 from datetime import datetime
 
 import config
-from data_loader import save_repairs_updates, save_repair_locations
+from data_loader import save_repairs_updates, save_repair_locations, delete_repairs
 from metrics import calculate_repair_cost_breakdown, calculate_total_repair_costs
 from utils import extract_conductor_system, find_column, match_mainline_to_sensor
 
@@ -341,10 +341,22 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
             st.divider()
 
-            if st.button("Save Changes", key="save_open", type="primary",
-                         help="Save any individual edits made in the table above"):
-                save_df = edited_open.drop(columns=['Select'])
-                _save_edits(save_df)
+            btn_col1, btn_col2, _ = st.columns([2, 2, 4])
+            with btn_col1:
+                if st.button("Save Changes", key="save_open", type="primary",
+                             help="Save any individual edits made in the table above"):
+                    save_df = edited_open.drop(columns=['Select'])
+                    _save_edits(save_df)
+            with btn_col2:
+                _del_count = int(edited_open['Select'].sum())
+                if st.button(
+                    f"Delete {_del_count} selected" if _del_count else "Select rows to delete",
+                    key="delete_open",
+                    type="secondary",
+                    disabled=_del_count == 0,
+                ):
+                    _ids = edited_open.loc[edited_open['Select'], 'Repair ID'].tolist()
+                    _delete_repairs(_ids)
 
         else:
             st.success("No open repairs! All issues have been resolved.")
@@ -492,7 +504,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                          column_order=_comp_display_order,
                          use_container_width=True, hide_index=True, height=500)
 
-            with st.expander("Edit completed repairs (re-open, change details)"):
+            with st.expander("Edit completed repairs (re-open, change details, or delete)"):
                 comp_edit_cols = ['Repair ID', 'Date Found', 'Mainline', 'Description', 'Found By',
                                   'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
                 comp_edit_cols = [c for c in comp_edit_cols if c in completed.columns]
@@ -500,6 +512,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     if _photo_col in completed.columns:
                         comp_edit_cols.append(_photo_col)
                 comp_edit = completed[comp_edit_cols].copy()
+                comp_edit.insert(0, 'Select', False)
 
                 if 'Date Found' in comp_edit.columns:
                     comp_edit['Date Found'] = comp_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
@@ -512,6 +525,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                         comp_edit[col] = comp_edit[col].fillna('').astype(str)
 
                 comp_config = {
+                    'Select': st.column_config.CheckboxColumn('Select', default=False),
                     'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
                     'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
                     'Mainline': st.column_config.TextColumn('Mainline', disabled=True),
@@ -534,7 +548,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     ),
                 }
 
-                _comp_edit_order = [c for c in comp_edit_cols if c != 'Repair ID']
+                _comp_edit_order = ['Select'] + [c for c in comp_edit_cols if c != 'Repair ID']
                 edited_comp = st.data_editor(
                     comp_edit,
                     column_config=comp_config,
@@ -544,8 +558,21 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     key="completed_repairs_editor"
                 )
 
-                if st.button("Save Changes", key="save_completed", type="primary"):
-                    _save_edits(edited_comp)
+                btn_col1, btn_col2, _ = st.columns([2, 2, 4])
+                with btn_col1:
+                    if st.button("Save Changes", key="save_completed", type="primary"):
+                        save_df = edited_comp.drop(columns=['Select'])
+                        _save_edits(save_df)
+                with btn_col2:
+                    _sel_count = int(edited_comp['Select'].sum())
+                    if st.button(
+                        f"Delete {_sel_count} selected" if _sel_count else "Select rows to delete",
+                        key="delete_completed",
+                        type="secondary",
+                        disabled=_sel_count == 0,
+                    ):
+                        _ids = edited_comp.loc[edited_comp['Select'], 'Repair ID'].tolist()
+                        _delete_repairs(_ids)
         else:
             st.info("No completed repairs yet.")
 
@@ -557,6 +584,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                         'Found By', 'Status', 'Date Resolved', 'Resolved By', 'Repair Cost', 'Notes']
             def_cols = [c for c in def_cols if c in deferred.columns]
             def_edit = deferred[def_cols].copy()
+            def_edit.insert(0, 'Select', False)
 
             if 'Date Found' in def_edit.columns:
                 def_edit['Date Found'] = def_edit['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
@@ -569,6 +597,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     def_edit[col] = def_edit[col].fillna('').astype(str)
 
             def_config = {
+                'Select': st.column_config.CheckboxColumn('Select', default=False),
                 'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
                 'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
                 'Age (Days)': st.column_config.NumberColumn('Age (Days)', disabled=True),
@@ -592,8 +621,21 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 key="deferred_repairs_editor"
             )
 
-            if st.button("Save Changes", key="save_deferred", type="primary"):
-                _save_edits(edited_def)
+            btn_col1, btn_col2, _ = st.columns([2, 2, 4])
+            with btn_col1:
+                if st.button("Save Changes", key="save_deferred", type="primary"):
+                    save_df = edited_def.drop(columns=['Select'])
+                    _save_edits(save_df)
+            with btn_col2:
+                _def_del_count = int(edited_def['Select'].sum())
+                if st.button(
+                    f"Delete {_def_del_count} selected" if _def_del_count else "Select rows to delete",
+                    key="delete_deferred",
+                    type="secondary",
+                    disabled=_def_del_count == 0,
+                ):
+                    _ids = edited_def.loc[edited_def['Select'], 'Repair ID'].tolist()
+                    _delete_repairs(_ids)
 
     # --- How to Use ---
     with st.expander("How to use Repairs Needed"):
@@ -878,6 +920,27 @@ def _save_edits(edited_df):
 
     if success:
         st.success(f"Saved! {message}")
+        st.rerun()
+    else:
+        st.error(message)
+
+
+def _delete_repairs(repair_ids):
+    """Delete selected repairs from Google Sheets."""
+    if not repair_ids:
+        st.warning("No repairs selected to delete.")
+        return
+
+    sheet_url = _get_sheet_url()
+    if not sheet_url:
+        st.error("Could not find sheet URL in configuration")
+        return
+
+    with st.spinner(f"Deleting {len(repair_ids)} repair(s) from Google Sheets..."):
+        success, message = delete_repairs(sheet_url, 'credentials.json', repair_ids)
+
+    if success:
+        st.success(f"Deleted! {message}")
         st.rerun()
     else:
         st.error(message)
