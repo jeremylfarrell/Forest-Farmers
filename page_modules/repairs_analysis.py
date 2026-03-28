@@ -246,7 +246,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
 
         if not open_repairs.empty:
             st.subheader(f"Open Repairs ({len(open_repairs)})")
-            st.caption("Edit Status, Date Resolved, Resolved By, Repair Cost, or Notes. Click **Save Changes** when done.")
+            st.caption("Edit individually, or use checkboxes + bulk action below to update multiple repairs at once.")
 
             open_repairs = open_repairs.sort_values('Age (Days)', ascending=False)
 
@@ -258,6 +258,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     editor_cols.append(_photo_col)
 
             edit_df = open_repairs[editor_cols].copy()
+            edit_df.insert(0, 'Select', False)
 
             if 'Date Found' in edit_df.columns:
                 edit_df['Date Found'] = edit_df['Date Found'].dt.strftime('%Y-%m-%d').fillna('')
@@ -271,6 +272,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                     edit_df[col] = edit_df[col].fillna('').astype(str)
 
             column_config = {
+                'Select': st.column_config.CheckboxColumn('Select', default=False),
                 'Repair ID': st.column_config.TextColumn('Repair ID', disabled=True),
                 'Date Found': st.column_config.TextColumn('Date Found', disabled=True),
                 'Age (Days)': st.column_config.NumberColumn('Age\n(Days)', disabled=True, width='small'),
@@ -294,7 +296,7 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 ),
             }
 
-            _open_col_order = [c for c in editor_cols if c != 'Repair ID']
+            _open_col_order = ['Select'] + [c for c in editor_cols if c != 'Repair ID']
             edited_open = st.data_editor(
                 edit_df,
                 column_config=column_config,
@@ -305,8 +307,44 @@ def render(personnel_df, vacuum_df=None, repairs_df=None):
                 key="open_repairs_editor"
             )
 
-            if st.button("Save Changes", key="save_open", type="primary"):
-                _save_edits(edited_open)
+            # --- Bulk Action Bar ---
+            selected_count = int(edited_open['Select'].sum())
+            bulk_col1, bulk_col2, bulk_col3 = st.columns([2, 2, 4])
+            with bulk_col1:
+                bulk_status = st.selectbox(
+                    "Set status for selected",
+                    ['Completed', 'Deferred', 'Open'],
+                    key="bulk_status_select"
+                )
+            with bulk_col2:
+                st.write("")  # spacer for alignment
+                st.write("")
+                apply_disabled = selected_count == 0
+                apply_bulk = st.button(
+                    f"Apply to {selected_count} selected" if selected_count else "Select rows above",
+                    key="apply_bulk",
+                    type="secondary",
+                    disabled=apply_disabled,
+                )
+            with bulk_col3:
+                st.write("")
+
+            if apply_bulk and selected_count > 0:
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                for idx in edited_open.index:
+                    if edited_open.at[idx, 'Select']:
+                        edited_open.at[idx, 'Status'] = bulk_status
+                        if bulk_status == 'Completed' and not edited_open.at[idx, 'Date Resolved']:
+                            edited_open.at[idx, 'Date Resolved'] = today_str
+                save_df = edited_open.drop(columns=['Select'])
+                _save_edits(save_df)
+
+            st.divider()
+
+            if st.button("Save Changes", key="save_open", type="primary",
+                         help="Save any individual edits made in the table above"):
+                save_df = edited_open.drop(columns=['Select'])
+                _save_edits(save_df)
 
         else:
             st.success("No open repairs! All issues have been resolved.")
