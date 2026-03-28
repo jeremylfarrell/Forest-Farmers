@@ -338,13 +338,28 @@ def _render_mainline_view(stats):
             lambda x: f"{x:.1f}\"" if pd.notna(x) else ""
         )
 
-    display_cols = ['Mainline', 'Conductor', 'Tapped By', 'Taps', 'Tapping Hours',
-                    'Cost/Tap (Tapping)', 'Tapping Cost', 'Fixing Hours', 'Fixing Cost',
-                    'Leak Check Hours', 'Leak Check Cost', 'Total Cost', 'All-In Cost/Tap',
-                    'Avg Rel Diff (>32F)']
-    display_cols = [c for c in display_cols if c in fmt.columns]
+    # Visible columns — Conductor, Tapping Hours, Tapping Cost, Total Cost hidden
+    # but kept in underlying data for filtering/sorting
+    visible_cols = ['Mainline', 'Tapped By', 'Taps', 'Cost/Tap (Tapping)',
+                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost',
+                    'All-In Cost/Tap', 'Avg Rel Diff (>32F)']
+    visible_cols = [c for c in visible_cols if c in fmt.columns]
 
-    st.dataframe(fmt[display_cols], use_container_width=True, hide_index=True,
+    col_config = {
+        'Mainline': st.column_config.TextColumn('Mainline'),
+        'Tapped By': st.column_config.TextColumn('Tapped\nBy'),
+        'Taps': st.column_config.NumberColumn('Taps', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
+        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
+        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
+        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
+        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+        'All-In Cost/Tap': st.column_config.TextColumn('All-In\nCost/Tap', width='small'),
+        'Avg Rel Diff (>32F)': st.column_config.TextColumn('Avg Rel Diff\n(>32°F)', width='small'),
+    }
+
+    st.dataframe(fmt, column_config=col_config, column_order=visible_cols,
+                 use_container_width=True, hide_index=True,
                  height=min(400 + len(fmt) * 10, 800))
 
     # Charts
@@ -420,7 +435,23 @@ def _render_employee_view(stats):
         if c in fmt.columns:
             fmt[c] = fmt[c].apply(lambda x: f"${x:,.2f}" if x > 0 else "")
 
-    st.dataframe(fmt, use_container_width=True, hide_index=True,
+    visible_cols = ['Employee', 'Mainlines Tapped', 'Taps', 'Cost/Tap (Tapping)',
+                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost']
+    visible_cols = [c for c in visible_cols if c in fmt.columns]
+
+    emp_col_config = {
+        'Employee': st.column_config.TextColumn('Employee'),
+        'Mainlines Tapped': st.column_config.NumberColumn('Mainlines\nTapped', width='small'),
+        'Taps': st.column_config.NumberColumn('Taps', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
+        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
+        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
+        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
+        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+    }
+
+    st.dataframe(fmt, column_config=emp_col_config, column_order=visible_cols,
+                 use_container_width=True, hide_index=True,
                  height=min(400 + len(fmt) * 10, 600))
 
     # Chart
@@ -479,5 +510,24 @@ def _render_combo_view(stats):
             lambda x: f"{x:.1f}\"" if pd.notna(x) else ""
         )
 
-    st.dataframe(fmt, use_container_width=True, hide_index=True,
+    visible_cols = ['Employee', 'Mainline', 'Taps', 'Cost/Tap (Tapping)',
+                    'Fixing Hours', 'Fixing Cost', 'Leak Check Hours', 'Leak Check Cost',
+                    'All-In Cost/Tap', 'Avg Rel Diff (>32F)']
+    visible_cols = [c for c in visible_cols if c in fmt.columns]
+
+    combo_col_config = {
+        'Employee': st.column_config.TextColumn('Employee'),
+        'Mainline': st.column_config.TextColumn('Mainline'),
+        'Taps': st.column_config.NumberColumn('Taps', width='small'),
+        'Cost/Tap (Tapping)': st.column_config.TextColumn('Cost/Tap\n(Tapping)', width='small'),
+        'Fixing Hours': st.column_config.NumberColumn('Fixing\nHours', width='small'),
+        'Fixing Cost': st.column_config.TextColumn('Fixing\nIssues Cost', width='small'),
+        'Leak Check Hours': st.column_config.NumberColumn('Leak Check\nHours', width='small'),
+        'Leak Check Cost': st.column_config.TextColumn('Leak Check\nCost', width='small'),
+        'All-In Cost/Tap': st.column_config.TextColumn('All-In\nCost/Tap', width='small'),
+        'Avg Rel Diff (>32F)': st.column_config.TextColumn('Avg Rel Diff\n(>32°F)', width='small'),
+    }
+
+    st.dataframe(fmt, column_config=combo_col_config, column_order=visible_cols,
+                 use_container_width=True, hide_index=True,
                  height=min(400 + len(fmt) * 10, 800))
