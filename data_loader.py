@@ -899,6 +899,13 @@ def process_vacuum_data(df):
     if releaser_col:
         df[releaser_col] = pd.to_numeric(df[releaser_col], errors='coerce')
 
+    # Detect and process temperature column
+    for col in df.columns:
+        cl = col.lower()
+        if 'temp' in cl or 'temperature' in cl or 'ambient' in cl:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            break
+
     return df
 
 

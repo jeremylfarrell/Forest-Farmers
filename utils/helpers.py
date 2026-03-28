@@ -61,6 +61,23 @@ def get_releaser_column(df):
     return None
 
 
+def get_temperature_column(df):
+    """
+    Find the temperature column in vacuum dataframe.
+    CDL sensors may report ambient temperature.
+
+    Returns:
+        Column name if found, None otherwise
+    """
+    if df.empty:
+        return None
+    for col in df.columns:
+        cl = col.lower()
+        if 'temp' in cl or 'temperature' in cl or 'ambient' in cl:
+            return col
+    return None
+
+
 def filter_recent_sensors(vacuum_df, days=2):
     """
     Filter to only sensors that have reported in the last N days
